@@ -2,7 +2,7 @@ name: astrbot_plugin_sender_activation
 display_name: "管理员的真理捍卫器"
 desc: "让你的 AI 在限定时间内无需再次被 @：主动追踪指定对象，或轮播检测全群成员的发言；发现不良论证就主动反驳，没有有效增量就优雅沉默"
 short_desc: "无需反复 @：让你的 AI 主动追踪、反驳，或优雅沉默"
-version: "1.1.0rc8"
+version: "1.1.0rc9"
 astrbot_version: ">=4.26.1,<4.27"
 author: zjj1280637679-ship-it
 repo: "https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation"

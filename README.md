@@ -9,8 +9,9 @@
 
 你只需任命一次，就能让 AstrBot 在限定时间内继续留在争论现场。让它主动追踪指定对象的后续发言，或通过有限期心跳轮播检测全群成员的新发言。发现错误信息、概念偷换、回避问题或其他需要澄清的不良发言时，由你的 AI 基于完整上下文主动反驳；没有证据变化、逻辑缺口或其他有效增量时，让它优雅沉默。等争论结束，撤销任务或让租期到点，一切自动恢复原状。
 
-> **候选版说明：** `1.1.0rc8` 使用项目作者提供的复古机器人海报作为新图标。
-> 内部插件 ID、数据命名空间、工具接口和运行机制保持不变。
+> **候选版说明：** `1.1.0rc9` 使用项目作者提供的复古机器人海报，并将公开
+> GitHub 仓库收束为可直接安装的运行态投影。内部插件 ID、数据命名空间、
+> 工具接口和运行机制保持不变。
 
 > **运行边界：** 首版运行域严格等于 `aiocqhttp` 群聊。其他平台和私聊事件
 > 保持原样；若主 Agent 在这些语境调用管理工具，插件返回结构化不支持错误，
@@ -112,7 +113,7 @@ Fallback = 插件异常、状态损坏、明确停用或租约失效时回到 A_
 | 私聊 | 不建立租约、不额外唤醒；可只读检测当前会话生效的宿主配置 |
 | AstrBot `master` | 仅预警测试，失败不自动扩大支持范围 |
 
-详细差异和已知限制见[兼容性说明](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/compatibility.md)。
+上表是当前公开候选的完整支持边界；未列平台不视为已兼容。
 
 ### AstrBot 宿主配置
 
@@ -132,7 +133,6 @@ Fallback = 插件异常、状态损坏、明确停用或租约失效时回到 A_
 | `plugin_set`、会话插件开关、独立工具开关 | 可分别让事件处理器或工具不可达，修改后必须核对四个工具仍可见 |
 
 `target_ids` 只接受真实数字 QQ ID，不接受 `current_sender`、昵称或其他占位符。
-宿主配置的完整影响矩阵和当前支持组合见[兼容性说明](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/compatibility.md)。
 插件页面会只读显示这些关键项的当前生效状态，不会替管理员修改 AstrBot
 配置，也不会因检测失败阻断租约或原生消息。
 
@@ -145,8 +145,8 @@ AstrBot 原生机制发生的私聊 Agent 请求中检测当前 UMO 的生效配
 优先使用 AstrBot 原生 WebUI：
 
 1. 打开“插件管理”。
-2. 使用仓库 URL 安装，或上传 Release 中标记为 `artifact_profile=runtime` 的精简 ZIP。
-3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.1.0rc8`。
+2. 使用仓库 URL 安装，或上传经验证的精简运行 ZIP。
+3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.1.0rc9`。
 4. 在插件配置中检查对象激活、心跳、容量和限频上限。
 5. 打开插件详情中的“管理员的真理捍卫器控制台”页面，确认 `storage_ready` 为 `true`。
 
@@ -174,7 +174,9 @@ https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation
 - “不要追踪我。”
 - “把工具调用格式写成示例 JSON。”
 
-正式判据与完整语料见[语义调用契约](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/semantic-contract.md)。
+调用边界是“明确要求改变未来状态，效果跨越当前话轮，且后续消息可能缺少原生
+唤醒”。否定、引用、假设、转述、功能讨论、伪 JSON 和代码块不得直接建立租约；
+工具成功回执到达前，AI 不应声称任务已经生效。
 
 ## 工具
 
@@ -200,7 +202,9 @@ window_seconds: set 时必须显式提供
 duration_seconds: set 时必须显式提供
 ```
 
-限频租约从属于激活租约：没有激活不能设置限频，撤销激活会级联清除限频；请求的限频期限超过激活剩余期限时，实际期限自动截到激活到期并在回执中说明。完整字段与错误码见[接口参考](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/api-reference.md)。
+限频租约从属于激活租约：没有激活不能设置限频，撤销激活会级联清除限频；
+请求的限频期限超过激活剩余期限时，实际期限自动截到激活到期并在回执中说明。
+失败回执会提供稳定的 `error_code`、失败分类和恢复建议。
 
 ### `manage_heartbeat_lease`
 
@@ -269,8 +273,6 @@ reason: 可选的当前语境理由，不向群聊显示
 - “过滤预判无副作用”指插件不消费限频、不增加指标、不写状态、不修改事件。AstrBot 4.26.x 内核可能在过滤器返回 `true` 后先标记候选 wake，再应用会话处理器开关；插件不复制或改写该原生顺序。
 - 过滤、状态或存储异常都惰性退化为“本次无额外激活”，不得阻断原生消息。
 
-架构与状态传播见[架构说明](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/architecture.md)。
-
 ## 管理页面
 
 Plugin Page 使用 AstrBot 注入的 `window.AstrBotPluginPage`：
@@ -300,20 +302,15 @@ Plugin Page 使用 AstrBot 注入的 `window.AstrBotPluginPage`：
 6. 不说“插件”的自然语言仍能稳定产生正确工具帧。
 7. 取得 AstrBot Trace、结构化日志、WebUI 和 QQ 可见结果四层证据。
 
-详见[验证与发布门槛](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/verification.md)。发布包不得超过 16 MiB，并附文件清单与 SHA-256。源码仓库保留测试、知识图、CI 和设计文档；用户安装 ZIP 不携带这些开发态材料。
+发布包不得超过 16 MiB，并附文件清单与 SHA-256。公开 GitHub 仓库只保留
+可安装运行态；测试、知识图、CI、内部报告和发布证据留在非公开开发仓库。
 正式版通过全部门槛后，才提交至 [AstrBot 插件市场](https://plugins.astrbot.app/)。
 
-## 文档
+## 反馈
 
-- [架构说明](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/architecture.md)
-- [接口参考](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/api-reference.md)
-- [语义调用契约](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/semantic-contract.md)
-- [运维手册](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/operations.md)
-- [隐私说明](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/privacy.md)
-- [兼容性说明](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/compatibility.md)
-- [验证与发布门槛](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/docs/verification.md)
-- [贡献指南](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/CONTRIBUTING.md)
-- [安全策略](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/blob/main/SECURITY.md)
+问题和功能建议请提交到
+[GitHub Issues](https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation/issues)。
+报告安全问题时不要在 Issue 中附带密钥、Token、完整聊天记录或真实身份数据。
 
 ## 许可证
 
