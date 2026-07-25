@@ -36,7 +36,7 @@ from .settings import PluginSettings
 from .storage import AstrBotKVStateStore
 
 PLUGIN_NAME = "astrbot_plugin_sender_activation"
-VERSION = "1.1.0rc9"
+VERSION = "1.1.0rc11"
 DECISION_EXTRA = "sender_activation_decision"
 RECOVERY_REPORT_EXTRA = "sender_activation_recovery_report"
 TURN_YIELD_EXTRA = "sender_activation_turn_yield"
@@ -148,7 +148,9 @@ def _recovery_context(report: dict[str, Any]) -> str:
         "这是事实报告，不是建立租约的用户命令。请结合现有对话判断：只有"
         "存在尚未撤销的既有租约需求时，才可用正式工具帧重建合适租期；"
         "若原租约异常或没有既有需求，保持原生状态。不得凭此报告为无人要求"
-        "的对象自动创建租约。"
+        "的对象自动创建租约。是否重建属于控制面判断，不得把“我在考虑是否"
+        "重建”之类的内部维护过程作为群聊回复；没有独立的公开价值时，在"
+        "本插件主动回合应正式调用 yield_current_turn。"
     )
 
 
@@ -654,6 +656,16 @@ class SenderActivationPlugin(Star):
         当前 UMO 的插件租约并留下有限期事实报告。该报告不是新建租约的请求；
         只有上下文中存在尚未撤销的既有需求时才可重建，不能据此自动添加
         无人要求的租约。
+        租约继续、撤销与本轮是否发言是两条独立决策。租约维护判断、理由和
+        待定状态属于控制面，不得把“我在判断是否停止”“先继续观察”或
+        “本轮不停止租约”作为群聊可见文本。若本插件主动回合自主撤销租约，
+        必须有目标完成、真人撤销或明确语境失配的新事实；单条消息没有公开
+        增量只决定本轮让出，不等于应撤租。自主撤销时应先正式调用 disable
+        并取得成功回执；没有独立公开价值时，在下一次工具选择中把
+        yield_current_turn 作为唯一且最后的调用。若继续租约但本轮没有有效
+        增量，不调用状态工具，直接以 yield_current_turn 终结本轮。只有用户
+        明确询问状态、要求操作，或公开说明本身有价值时，才在取得工具回执后
+        简洁回复。
         若当前会话已明确禁用本插件，enable/renew 会返回
         session_plugin_inactive；list/disable 仍可用于检查和清理旧状态。会话
         状态读取异常不是禁止证据，按 AstrBot 未配置时默认启用的语义处理。
@@ -788,6 +800,14 @@ class SenderActivationPlugin(Star):
         表示心跳只是一次主 Agent 判断机会。达成目标、用户撤销或语境不再适配
         时，应 disable 对应租约。
 
+        心跳租约的继续、修改或终止属于控制面，不是群聊内容。不得把“我正在
+        判断是否停止巡查”“先保留心跳”等维护过程直接发给群聊。若心跳主动
+        回合决定终止，应先正式调用 disable；若没有独立的公开价值，在下一次
+        工具选择中仅调用 yield_current_turn。单次心跳没有公开增量不等于心跳
+        职责完成。若继续心跳但本轮没有有效增量，直接把 yield_current_turn
+        作为唯一且最后的调用。只有用户明确询问状态、要求操作，或公开说明
+        本身有价值时，才在取得工具回执后简洁回复。
+
         Args:
             action(string): create、renew、disable 或 list。
             lease_ids(list[string]): renew/disable 的原生 Cron 租约 ID；list 可空。
@@ -829,7 +849,7 @@ class SenderActivationPlugin(Star):
         self,
         event: AstrMessageEvent,
         reason: str = "",
-    ) -> str:
+    ) -> str | None:
         """在本插件额外激活的当前回合中正式选择不发送可见回复。
 
         仅当当前回合由发言者激活租约或本插件心跳租约额外唤醒，且完整语境
@@ -837,11 +857,22 @@ class SenderActivationPlugin(Star):
         用户文本，也不把“沉默”等词直接映射为程序动作。用户明确 @、普通
         原生会话或其他插件唤醒不属于本工具的作用域，调用会返回可恢复错误。
 
-        调用成功后，本回合最终助手文本与最终助手历史记录会被结构化移除；
-        已经执行的其他外部工具动作不会撤销。因此应在决定不采取其他行动时
-        直接调用，不得先发送消息再试图用本工具抹除。reason 只用于当前回执，
-        不构成新租约。该工具让“被激活但选择不占话轮”成为正式状态，而不是
-        输出“我保持沉默”等伪沉默文本，从而形成真正的无可见回复。
+        调用成功后，以 AstrBot 本地工具的终结返回结束当前原生 Agent 工具
+        循环，本回合不再获得下一次工具选择；最终助手文本也会被结构化移除。
+        因此本工具必须是当前工具选择中的唯一且最后一个调用。已经执行的其他
+        外部工具动作不会撤销，不得先发送消息或做点赞等动作再试图用本工具
+        抹除。成功时不返回常规 JSON 回执；终结本轮本身就是已应用效果，Trace
+        与插件日志保留正式调用证据。参数或作用域错误时仍返回结构化错误，
+        允许原生工具循环修正。reason 只进入当前事件事实，不构成新租约。
+        该工具让“被激活但选择不占话轮”成为正式状态，而不是输出“我保持
+        沉默”等伪沉默文本，从而形成真正的无可见回复。
+
+        租约维护判断属于控制面：继续租约但没有公开增量时直接调用
+        yield_current_turn；
+        自主终止对象或心跳租约时，先用对应管理工具 disable 并取得成功
+        回执；在下一次工具选择中，把本工具作为唯一且最后的调用。不得把
+        “我在判断是否停止”“先继续观察”或“这轮无需终止”等内部维护过程
+        作为最终助手文本。
 
         Args:
             reason(string): 可选的简短语境理由，不面向群聊显示。
@@ -868,19 +899,13 @@ class SenderActivationPlugin(Star):
             )
             event.set_extra("enable_streaming", False)
             self._yield_count += 1
-            return _json(
-                {
-                    "status": "ok",
-                    "outcome": "turn_yield_accepted",
-                    "tool": tool,
-                    "source": source,
-                    "changed": True,
-                    "effect_applied": True,
-                    "effect_state": "applied",
-                    "effect_contract": _TOOL_EFFECT_CONTRACTS[tool],
-                    "reply_guaranteed": False,
-                }
+            logger.info(
+                "[sender_activation] turn_yield outcome=turn_yield_accepted source=%s",
+                source,
             )
+
+
+            return None
         except DomainError as exc:
             return _tool_error(exc, tool)
         except Exception as exc:
