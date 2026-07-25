@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>管理员的真理捍卫器控制台</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div>
+        <h1 id="page-title">管理员的真理捍卫器控制台</h1>
+        <p id="version-line" class="muted">--</p>
+      </div>
+      <button id="refresh-button" type="button">刷新</button>
+    </header>
+
+    <main>
+      <section class="status-strip" aria-label="运行状态">
+        <div>
+          <span class="label">存储</span>
+          <strong id="storage-status">--</strong>
+        </div>
+        <div>
+          <span class="label">全局激活租约</span>
+          <strong id="activation-count">0</strong>
+        </div>
+        <div>
+          <span class="label">全局限频租约</span>
+          <strong id="rate-count">0</strong>
+        </div>
+        <div>
+          <span class="label">全局心跳租约</span>
+          <strong id="heartbeat-count">0</strong>
+        </div>
+        <div>
+          <span class="label">隔离记录</span>
+          <strong id="quarantine-count">0</strong>
+        </div>
+      </section>
+
+      <section class="status-strip contract-strip" aria-label="作用契约">
+        <div>
+          <span class="label">作用机制</span>
+          <strong>额外主 Agent 可达性</strong>
+        </div>
+        <div>
+          <span class="label">回复保证</span>
+          <strong>不保证，由主 Agent 判断</strong>
+        </div>
+        <div>
+          <span class="label">原生 @ 与命令</span>
+          <strong>不受插件限频影响</strong>
+        </div>
+        <div>
+          <span class="label">生命周期</span>
+          <strong>对象 / 时序激活，到期自动退出</strong>
+        </div>
+      </section>
+
+      <section class="section" aria-label="AstrBot 宿主配置检测">
+        <div class="section-heading">
+          <h2>AstrBot 宿主配置检测</h2>
+          <strong id="host-config-status" class="host-config-summary unknown"
+            >未检测</strong
+          >
+        </div>
+        <p class="scope-note">
+          只读检测 AstrBot 当前生效配置，不会自动修改设置。检测来源：
+          <strong id="host-config-source">--</strong>
+        </p>
+        <div id="host-config-rows" class="host-config-grid"></div>
+        <p class="scope-note">
+          AstrBot 白名单、原生速率限制、全局/会话插件开关和独立工具开关仍然
+          生效。插件默认不限频只表示没有插件限频租约，不会覆盖宿主限流。
+        </p>
+      </section>
+
+      <section class="section">
+        <div class="section-heading">
+          <h2>作用域</h2>
+          <span id="scope-ref" class="mono muted">--</span>
+        </div>
+        <div class="form-grid scope-grid">
+          <label>
+            <span>已有作用域</span>
+            <select id="scope-select">
+              <option value="">请选择作用域</option>
+            </select>
+          </label>
+        </div>
+        <p class="scope-note">
+          页面一次只管理一个真实事件已经建立的脱敏作用域引用，不能创建或伪造 UMO。
+        </p>
+        <p class="scope-note">
+          当前会话插件状态：<strong id="session-status">未选择作用域</strong>
+        </p>
+      </section>
+
+      <section class="section">
+        <div class="section-heading">
+          <h2>结构恢复报告</h2>
+          <span id="recovery-count" class="muted">0 条</span>
+        </div>
+        <p class="scope-note">
+          报告只记录程序因主 Agent 结构错误而还原的既有租约；它不会自动新建租约。
+        </p>
+        <div id="recovery-table-wrap" class="table-wrap">
+          <table class="recovery-table">
+            <thead>
+              <tr>
+                <th>报告 ID</th>
+                <th>原因</th>
+                <th>剩余时间</th>
+                <th>被还原目标与原参数</th>
+              </tr>
+            </thead>
+            <tbody id="recovery-rows"></tbody>
+          </table>
+        </div>
+        <div id="recovery-empty" class="empty-state">暂无待处理恢复报告</div>
+      </section>
+
+      <section class="section">
+        <h2>激活租约</h2>
+        <form id="activation-form" class="form-grid">
+          <label>
+            <span>操作</span>
+            <select id="activation-action">
+              <option value="enable">启用</option>
+              <option value="renew">续期</option>
+              <option value="disable">撤销</option>
+            </select>
+          </label>
+          <label class="wide">
+            <span>QQ ID</span>
+            <input
+              id="activation-targets"
+              type="text"
+              inputmode="numeric"
+              autocomplete="off"
+              placeholder="多个 ID 用空格或逗号分隔"
+              required
+            />
+          </label>
+          <label>
+            <span>有效期（秒）</span>
+            <input
+              id="activation-duration"
+              type="number"
+              min="0"
+              step="1"
+              value="86400"
+            />
+          </label>
+          <div class="form-action">
+            <button type="submit">应用</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="section">
+        <h2>额外激活限频</h2>
+        <form id="rate-form" class="form-grid">
+          <label>
+            <span>操作</span>
+            <select id="rate-action">
+              <option value="set">设置</option>
+              <option value="clear">清除</option>
+            </select>
+          </label>
+          <label class="wide">
+            <span>QQ ID</span>
+            <input
+              id="rate-targets"
+              type="text"
+              inputmode="numeric"
+              autocomplete="off"
+              placeholder="多个 ID 用空格或逗号分隔"
+              required
+            />
+          </label>
+          <label>
+            <span>窗口次数</span>
+            <input id="rate-maximum" type="number" min="1" step="1" value="1" />
+          </label>
+          <label>
+            <span>窗口秒数</span>
+            <input
+              id="rate-window"
+              type="number"
+              min="0.1"
+              step="0.1"
+              value="4"
+            />
+          </label>
+          <label>
+            <span>有效期（秒）</span>
+            <input
+              id="rate-duration"
+              type="number"
+              min="1"
+              step="1"
+              value="3600"
+            />
+          </label>
+          <div class="form-action">
+            <button type="submit">应用</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="section">
+        <h2>原生 Agent 心跳租约</h2>
+        <p class="scope-note">
+          复用 AstrBot 原生 Cron，按时只提供一次主 Agent 判断机会；职业和行动由
+          Skill 与现场语境决定，插件不强制回复。
+        </p>
+        <form id="heartbeat-form" class="form-grid heartbeat-form">
+          <label>
+            <span>操作</span>
+            <select id="heartbeat-action">
+              <option value="create">新建</option>
+              <option value="renew">续期 / 修改</option>
+              <option value="disable">终止</option>
+            </select>
+          </label>
+          <label class="wide">
+            <span>租约 ID（续期或终止时填写）</span>
+            <input
+              id="heartbeat-ids"
+              type="text"
+              autocomplete="off"
+              placeholder="多个 ID 用空格或逗号分隔"
+            />
+          </label>
+          <label>
+            <span>名称</span>
+            <input
+              id="heartbeat-name"
+              type="text"
+              maxlength="80"
+              value="临时群聊职责"
+            />
+          </label>
+          <label>
+            <span>五段 Cron</span>
+            <input
+              id="heartbeat-cron"
+              type="text"
+              autocomplete="off"
+              value="*/5 * * * *"
+            />
+          </label>
+          <label>
+            <span>有效期（秒）</span>
+            <input
+              id="heartbeat-duration"
+              type="number"
+              min="60"
+              step="1"
+              value="3600"
+            />
+          </label>
+          <label class="full-width">
+            <span>每次唤醒交给主 Agent 的语境目标</span>
+            <textarea
+              id="heartbeat-instruction"
+              rows="3"
+              maxlength="4000"
+              placeholder="说明要观察什么、何时介入以及何时保持沉默"
+            ></textarea>
+          </label>
+          <div class="form-action">
+            <button type="submit">应用</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="section">
+        <div class="section-heading">
+          <h2>当前租约</h2>
+          <span id="row-count" class="muted">0 条</span>
+        </div>
+        <div id="lease-table-wrap" class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>作用域</th>
+                <th>QQ ID</th>
+                <th>激活剩余</th>
+                <th>限频</th>
+                <th>限频剩余</th>
+                <th>激活创建者 / 限频来源</th>
+                <th class="actions-column">操作</th>
+              </tr>
+            </thead>
+            <tbody id="lease-rows"></tbody>
+          </table>
+        </div>
+        <div id="empty-state" class="empty-state">暂无租约</div>
+      </section>
+
+      <section class="section">
+        <div class="section-heading">
+          <h2>当前心跳租约</h2>
+          <span id="heartbeat-row-count" class="muted">0 条</span>
+        </div>
+        <div id="heartbeat-table-wrap" class="table-wrap">
+          <table class="heartbeat-table">
+            <thead>
+              <tr>
+                <th>租约 ID</th>
+                <th>名称</th>
+                <th>Cron</th>
+                <th>剩余</th>
+                <th>状态</th>
+                <th>语境目标</th>
+                <th class="actions-column">操作</th>
+              </tr>
+            </thead>
+            <tbody id="heartbeat-rows"></tbody>
+          </table>
+        </div>
+        <div id="heartbeat-empty" class="empty-state">暂无心跳租约</div>
+      </section>
+
+      <section class="section diagnostics">
+        <h2>诊断</h2>
+        <pre id="diagnostics-output">--</pre>
+      </section>
+    </main>
+
+    <div id="confirmation-layer" class="confirmation-layer" hidden>
+      <section
+        class="confirmation-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirmation-title"
+        aria-describedby="confirmation-message"
+      >
+        <h2 id="confirmation-title">确认操作</h2>
+        <p id="confirmation-message" class="confirmation-message"></p>
+        <dl class="impact-list">
+          <div>
+            <dt>影响范围</dt>
+            <dd id="confirmation-scope" class="mono"></dd>
+          </div>
+          <div>
+            <dt>目标数</dt>
+            <dd id="confirmation-target-count"></dd>
+          </div>
+          <div>
+            <dt>目标</dt>
+            <dd id="confirmation-targets" class="mono"></dd>
+          </div>
+        </dl>
+        <label id="confirmation-batch" class="confirmation-batch" hidden>
+          <input id="confirmation-batch-ack" type="checkbox" />
+          <span id="confirmation-batch-label">我已确认这是批量操作。</span>
+        </label>
+        <div class="confirmation-actions">
+          <button id="confirmation-cancel" type="button" class="secondary">
+            取消
+          </button>
+          <button id="confirmation-accept" type="button">确认</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="notice" class="notice" role="status" aria-live="polite"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

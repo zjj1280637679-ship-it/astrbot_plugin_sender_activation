@@ -1,0 +1,88 @@
+{
+  "activation_default_seconds": {
+    "description": "激活租约默认有效期（秒）",
+    "type": "int",
+    "default": 86400,
+    "hint": "工具省略有效期时使用 24 小时；不能创建永久激活。"
+  },
+  "activation_max_seconds": {
+    "description": "激活租约最长有效期（秒）",
+    "type": "int",
+    "default": 31536000,
+    "hint": "硬上限为 365 天。"
+  },
+  "max_targets_per_scope": {
+    "description": "每个 UMO 最多同时激活的 QQ ID 数",
+    "type": "int",
+    "default": 20,
+    "hint": "同一 QQ ID 在不同群的租约相互独立。"
+  },
+  "max_targets_total": {
+    "description": "整个插件最多同时激活的目标数",
+    "type": "int",
+    "default": 500,
+    "hint": "限制所有 UMO 的激活租约总数，避免状态无界增长。"
+  },
+  "rate_max_duration_seconds": {
+    "description": "限频租约最长有效期（秒）",
+    "type": "int",
+    "default": 86400,
+    "hint": "限频必须显式创建并自动失效；默认不存在额外限频。"
+  },
+  "rate_max_activations": {
+    "description": "单个滑动窗口允许的最高额外激活次数",
+    "type": "int",
+    "default": 1000,
+    "hint": "仅约束新建或修改的限频租约，硬上限为 1000。"
+  },
+  "rate_max_window_seconds": {
+    "description": "单个限频滑动窗口最长秒数",
+    "type": "int",
+    "default": 86400,
+    "hint": "仅约束新建或修改的限频租约，硬上限为 24 小时。"
+  },
+  "heartbeat_default_seconds": {
+    "description": "心跳租约默认有效期（秒）",
+    "type": "int",
+    "default": 3600,
+    "hint": "主 AI 省略有效期时使用 1 小时；心跳始终是有限期租约。"
+  },
+  "heartbeat_max_seconds": {
+    "description": "心跳租约最长有效期（秒）",
+    "type": "int",
+    "default": 86400,
+    "hint": "可配置上限不超过 7 天。心跳调度复用 AstrBot 原生 Cron。"
+  },
+  "max_heartbeats_per_scope": {
+    "description": "每个 UMO 最多同时存在的心跳租约数",
+    "type": "int",
+    "default": 10,
+    "hint": "职业和用途不占代码分支；不同目标可用独立有限期心跳组合。"
+  },
+  "max_heartbeats_total": {
+    "description": "整个插件最多同时存在的心跳租约数",
+    "type": "int",
+    "default": 100,
+    "hint": "限制插件拥有的原生 Cron 任务总数，避免状态无界增长。"
+  },
+  "recovery_report_seconds": {
+    "description": "结构故障还原报告保留秒数",
+    "type": "int",
+    "default": 86400,
+    "hint": "主 Agent 额外唤醒发生结构错误时，插件清空当前作用域租约并保留事实报告；下次原生唤醒交由主 Agent 依据上下文决定是否重建。范围 60 秒至 7 天。"
+  },
+  "host_config_notice_mode": {
+    "description": "宿主配置检测提醒方式",
+    "type": "string",
+    "default": "page_and_agent",
+    "options": [
+      "page_only",
+      "page_and_agent"
+    ],
+    "labels": [
+      "仅插件页面",
+      "插件页面 + 主 Agent 语境提醒"
+    ],
+    "hint": "检测器只读 AstrBot 当前生效配置，不会自动修改设置。page_and_agent 只向主 Agent提供不持久化的配置事实，由主 Agent结合完整语境决定是否提醒用户；插件不会直接发言。"
+  }
+}
