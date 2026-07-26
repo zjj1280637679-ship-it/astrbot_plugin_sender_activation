@@ -23,6 +23,30 @@
     "default": 500,
     "hint": "限制所有 UMO 的激活租约总数，避免状态无界增长。"
   },
+  "operator_access_default_seconds": {
+    "description": "插件操作员授权默认有效期（秒）",
+    "type": "int",
+    "default": 2592000,
+    "hint": "管理员省略有效期时使用 30 天；授权到期后自动失效。"
+  },
+  "operator_access_max_seconds": {
+    "description": "插件操作员授权最长有效期（秒）",
+    "type": "int",
+    "default": 31536000,
+    "hint": "硬上限为 365 天；需要继续使用时可续期。"
+  },
+  "max_operators_per_scope": {
+    "description": "每个 UMO 最多同时授权的插件操作员数",
+    "type": "int",
+    "default": 50,
+    "hint": "授权仅在当前群作用域生效，不授予 AstrBot 管理员权限。"
+  },
+  "max_operators_total": {
+    "description": "整个插件最多同时保存的操作员授权数",
+    "type": "int",
+    "default": 1000,
+    "hint": "限制所有作用域的授权总数，避免状态无界增长。"
+  },
   "rate_max_duration_seconds": {
     "description": "限频租约最长有效期（秒）",
     "type": "int",

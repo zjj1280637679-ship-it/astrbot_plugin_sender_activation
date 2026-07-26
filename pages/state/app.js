@@ -8,10 +8,13 @@ const elements = {
   activations: document.getElementById("activation-count"),
   rates: document.getElementById("rate-count"),
   heartbeats: document.getElementById("heartbeat-count"),
+  accessCount: document.getElementById("access-count"),
   quarantine: document.getElementById("quarantine-count"),
   hostConfigStatus: document.getElementById("host-config-status"),
   hostConfigSource: document.getElementById("host-config-source"),
   hostConfigRows: document.getElementById("host-config-rows"),
+  toolPermissionStatus: document.getElementById("tool-permission-status"),
+  toolPermissionRows: document.getElementById("tool-permission-rows"),
   scopeSelect: document.getElementById("scope-select"),
   scopeRef: document.getElementById("scope-ref"),
   sessionStatus: document.getElementById("session-status"),
@@ -19,6 +22,14 @@ const elements = {
   recoveryCount: document.getElementById("recovery-count"),
   recoveryEmpty: document.getElementById("recovery-empty"),
   recoveryTableWrap: document.getElementById("recovery-table-wrap"),
+  accessForm: document.getElementById("access-form"),
+  accessAction: document.getElementById("access-action"),
+  accessTargets: document.getElementById("access-targets"),
+  accessDuration: document.getElementById("access-duration"),
+  accessRows: document.getElementById("access-rows"),
+  accessTableWrap: document.getElementById("access-table-wrap"),
+  accessRowCount: document.getElementById("access-row-count"),
+  accessEmpty: document.getElementById("access-empty"),
   activationForm: document.getElementById("activation-form"),
   activationAction: document.getElementById("activation-action"),
   activationTargets: document.getElementById("activation-targets"),
@@ -176,6 +187,13 @@ function outcomeMessage(result, fallback) {
     heartbeat_already_absent: t(
       "heartbeatAlreadyAbsent",
       "指定心跳租约原本不存在。",
+    ),
+    operator_access_granted: t("operatorAccessGranted", "插件操作员授权已建立。"),
+    operator_access_renewed: t("operatorAccessRenewed", "插件操作员授权已续期。"),
+    operator_access_revoked: t("operatorAccessRevoked", "插件操作员授权已撤销。"),
+    operator_access_already_absent: t(
+      "operatorAccessAlreadyAbsent",
+      "目标原本没有插件操作员授权。",
     ),
   };
   return labels[result.outcome] || fallback;
@@ -355,6 +373,42 @@ function renderHeartbeatRows(payload) {
   elements.heartbeatTableWrap.style.display = leases.length ? "block" : "none";
 }
 
+function renderAccessRows(payload) {
+  const grants = payload.state.operator_grants || [];
+  elements.accessRows.replaceChildren();
+  for (const grant of grants) {
+    const row = document.createElement("tr");
+    for (const value of [
+      grant.operator_id,
+      secondsLabel(grant.remaining_seconds),
+      grant.created_by,
+    ]) {
+      const cell = document.createElement("td");
+      cell.textContent = value || "--";
+      row.append(cell);
+    }
+    const actions = document.createElement("td");
+    actions.className = "row-actions";
+    actions.append(
+      button(t("revoke", "撤销"), "small danger", async () => {
+        const confirmed = await requestConfirmation({
+          message: t("confirmAccessRevoke", "确认收回此成员的插件使用权？"),
+          scope: grant.scope_ref,
+          targets: [grant.operator_id],
+          destructive: true,
+        });
+        if (!confirmed) return;
+        await postAccess("revoke", grant.scope_ref, [grant.operator_id], 0);
+      }),
+    );
+    row.append(actions);
+    elements.accessRows.append(row);
+  }
+  elements.accessRowCount.textContent = `${grants.length} ${t("rows", "条")}`;
+  elements.accessEmpty.style.display = grants.length ? "none" : "block";
+  elements.accessTableWrap.style.display = grants.length ? "block" : "none";
+}
+
 function renderHostConfig(payload) {
   const report = payload.host_config || {
     status: "unknown",
@@ -430,6 +484,40 @@ function renderHostConfig(payload) {
   }
 }
 
+function renderToolPermissions(payload) {
+  const report = payload.tool_permissions || {
+    status: "unknown",
+    checks: [],
+  };
+  const statusLabels = {
+    ready: t("toolPermissionsReady", "成员可达"),
+    blocked: t("toolPermissionsBlocked", "授权成员会被阻断"),
+    unknown: t("toolPermissionsUnknown", "无法确认"),
+  };
+  elements.toolPermissionStatus.textContent =
+    statusLabels[report.status] || statusLabels.unknown;
+  elements.toolPermissionStatus.className =
+    `host-config-summary ${report.status || "unknown"}`;
+  elements.toolPermissionRows.replaceChildren();
+  for (const check of report.checks || []) {
+    const row = document.createElement("div");
+    row.className = `host-config-row ${
+      check.delegate_reachable ? "pass" : "action_required"
+    }`;
+    const name = document.createElement("strong");
+    name.textContent = check.tool;
+    const observed = document.createElement("span");
+    observed.textContent = check.effective_permission;
+    const status = document.createElement("span");
+    status.className = "host-config-check-status";
+    status.textContent = check.delegate_reachable
+      ? t("delegateReachable", "授权成员可达")
+      : t("delegateBlocked", "请改为 member");
+    row.append(name, observed, status);
+    elements.toolPermissionRows.append(row);
+  }
+}
+
 function render(payload) {
   currentPayload = payload;
   const health = payload.health;
@@ -447,12 +535,15 @@ function render(payload) {
   elements.activations.textContent = String(health.activation_count);
   elements.rates.textContent = String(health.rate_count);
   elements.heartbeats.textContent = String(health.heartbeat_count || 0);
+  elements.accessCount.textContent = String(health.access_grant_count || 0);
   elements.quarantine.textContent = String(
     (health.quarantined_count || 0) +
       (health.heartbeat_quarantined_count || 0),
   );
   renderHostConfig(payload);
+  renderToolPermissions(payload);
   renderScopes(payload);
+  renderAccessRows(payload);
   renderRows(payload);
   renderRecoveryReports(payload);
   renderHeartbeatRows(payload);
@@ -553,6 +644,24 @@ async function postHeartbeat(action, scopeRef, leaseIds = [], values = {}) {
   await refresh();
 }
 
+async function postAccess(action, scopeRef, operatorIds, durationSeconds) {
+  const result = await bridge.apiPost("access", {
+    action,
+    scope_ref: scopeRef,
+    operator_ids: operatorIds,
+    duration_seconds: durationSeconds,
+  });
+  notify(
+    outcomeMessage(
+      result,
+      result.changed
+        ? t("accessChanged", "插件操作员授权已更新。")
+        : t("noChange", "状态没有变化。"),
+    ),
+  );
+  await refresh();
+}
+
 elements.scopeSelect.addEventListener("change", () => {
   elements.scopeRef.textContent = scopeRef(elements.scopeSelect.value);
   refresh();
@@ -561,6 +670,10 @@ elements.scopeSelect.addEventListener("change", () => {
 elements.activationAction.addEventListener("change", () => {
   elements.activationDuration.disabled =
     elements.activationAction.value === "disable";
+});
+
+elements.accessAction.addEventListener("change", () => {
+  elements.accessDuration.disabled = elements.accessAction.value === "revoke";
 });
 
 elements.rateAction.addEventListener("change", () => {
@@ -625,6 +738,34 @@ elements.activationForm.addEventListener("submit", async (event) => {
       scope,
       targets,
       Number(elements.activationDuration.value || 0),
+    );
+  } catch (error) {
+    notify(error.message || String(error), "error");
+  }
+});
+
+elements.accessForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const scope = requireScope();
+    const targets = parseTargets(elements.accessTargets.value);
+    if (!targets.length) throw new Error(t("targetsRequired", "请填写 QQ ID。"));
+    const action = elements.accessAction.value;
+    const confirmed = await requestConfirmation({
+      message:
+        action === "revoke"
+          ? t("confirmAccessRevoke", "确认收回这些成员的插件使用权？")
+          : t("confirmAccessChange", "确认更新这些成员的插件使用权？"),
+      scope,
+      targets,
+      destructive: action === "revoke",
+    });
+    if (!confirmed) return;
+    await postAccess(
+      action,
+      scope,
+      targets,
+      Number(elements.accessDuration.value || 0),
     );
   } catch (error) {
     notify(error.message || String(error), "error");

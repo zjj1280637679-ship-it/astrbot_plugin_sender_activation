@@ -48,6 +48,8 @@ class ActorContext:
     sender_id: str
     actor_ref: str
     channel: str
+    is_admin: bool = False
+    proactive_source: str | None = None
 
 
 class SlidingWindowCounters:

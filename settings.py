@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .access_domain import AccessLimits
 from .domain import Limits
 from .heartbeat_domain import HeartbeatLimits
 
@@ -48,6 +49,7 @@ def _choice(
 class PluginSettings:
     limits: Limits
     heartbeat_limits: HeartbeatLimits = field(default_factory=HeartbeatLimits)
+    access_limits: AccessLimits = field(default_factory=AccessLimits)
     host_config_notice_mode: str = "page_and_agent"
 
     @classmethod
@@ -79,6 +81,13 @@ class PluginSettings:
             24 * 60 * 60,
             60,
             7 * 24 * 60 * 60,
+        )
+        access_max = _int(
+            config,
+            "operator_access_max_seconds",
+            365 * 24 * 60 * 60,
+            60,
+            365 * 24 * 60 * 60,
         )
         return cls(
             limits=Limits(
@@ -143,6 +152,30 @@ class PluginSettings:
                     100,
                     1,
                     1000,
+                ),
+            ),
+            access_limits=AccessLimits(
+                default_duration_seconds=_int(
+                    config,
+                    "operator_access_default_seconds",
+                    30 * 24 * 60 * 60,
+                    60,
+                    access_max,
+                ),
+                max_duration_seconds=access_max,
+                max_per_scope=_int(
+                    config,
+                    "max_operators_per_scope",
+                    50,
+                    1,
+                    100,
+                ),
+                max_total=_int(
+                    config,
+                    "max_operators_total",
+                    1000,
+                    1,
+                    5000,
                 ),
             ),
             host_config_notice_mode=_choice(

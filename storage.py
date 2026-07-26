@@ -32,8 +32,16 @@ class CommitIndeterminateError(RuntimeError):
 class AstrBotKVStateStore:
 
 
-    def __init__(self, plugin: KVPlugin) -> None:
+    def __init__(
+        self,
+        plugin: KVPlugin,
+        *,
+        state_key: str = STATE_KEY,
+        backup_key: str = BACKUP_KEY,
+    ) -> None:
         self._plugin = plugin
+        self._state_key = state_key
+        self._backup_key = backup_key
 
     async def load(self) -> StoredDocuments:
         async def read_slot(
@@ -45,8 +53,8 @@ class AstrBotKVStateStore:
                 return None, type(exc).__name__
             return value, None
 
-        primary, primary_error = await read_slot(STATE_KEY)
-        backup, backup_error = await read_slot(BACKUP_KEY)
+        primary, primary_error = await read_slot(self._state_key)
+        backup, backup_error = await read_slot(self._backup_key)
         return StoredDocuments(
             primary=primary,
             backup=backup,
@@ -81,5 +89,5 @@ class AstrBotKVStateStore:
         candidate_document: Mapping[str, Any],
     ) -> None:
 
-        await self._put_verified(BACKUP_KEY, previous_document)
-        await self._put_verified(STATE_KEY, candidate_document)
+        await self._put_verified(self._backup_key, previous_document)
+        await self._put_verified(self._state_key, candidate_document)

@@ -16,7 +16,7 @@
 - **定时巡查群聊**：用原生 Cron 心跳定时唤醒主 Agent，检查当时可见的群聊上下文。
 - **群聊监控中的主动沉默**：激活不等于强制回复，没有有效增量时由 AI 正式让出话轮。
 
-> **候选版说明：** `1.1.0rc11` 使用项目作者提供的复古机器人海报，并将公开
+> **候选版说明：** `1.1.0rc13` 使用项目作者提供的复古机器人海报，并将公开
 > GitHub 仓库收束为可直接安装的运行态投影。内部插件 ID、数据命名空间、
 > 工具接口和运行机制保持不变。
 
@@ -89,7 +89,9 @@ Execute  = 插件按正式工具帧维护 I、H、L_i 与当前回合 Y
 Fallback = 插件异常、状态损坏、明确停用或租约失效时回到 A_native
 ```
 
-当前消息发送者 ID 是语境事实和目标候选，不是插件授权主体。插件不判断谁
+插件不会把 AstrBot 超级管理员权限扩散给普通成员。管理员可以按当前群和
+QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插件的对象激活、
+限频和心跳，不能配置 AstrBot、操作其他插件或跨群转授权。插件不判断谁
 掌握真理、何时必须反驳；主 Agent 可以根据新证据修正或结束租约。若插件自身
 崩溃或被宿主阻塞，失败语义只能是“不再新增唤醒”，不能阻断或改写原生路径。
 
@@ -131,13 +133,14 @@ Fallback = 插件异常、状态损坏、明确停用或租约失效时回到 A_
 | --- | --- |
 | `provider_settings.enable` | 必须开启；关闭后租约最多只能产生 wake 机会，主 Agent 不会运行 |
 | `provider_settings.agent_runner_type` | 首版只验收内置 `local` Agent；第三方 Agent 执行器不在正式支持范围 |
-| 当前对话模型的 `tool_use` 能力 | 必须具备，否则主 Agent 不能产生四个正式工具帧 |
+| 当前对话模型的 `tool_use` 能力 | 必须具备，否则主 Agent 不能产生五个正式工具帧 |
 | `provider_settings.show_tool_use_status=false` | 要实现完全无可见回复时应关闭；否则宿主可能先发送工具调用状态 |
 | `provider_settings.identifier`（用户识别） | 使用“我、本人、刚才那个人”等表达时应开启，使主 Agent 获得真实 User ID；插件事件层仍会读取 ID，但模型看不到就无法可靠填写 `target_ids` |
 | `provider_settings.wake_prefix`（LLM 额外唤醒前缀） | 要让租约命中的普通非前缀消息进入 Agent，必须留空；它不同于顶层普通唤醒词 |
 | `platform_settings.unique_session`（隔离会话） | 跨成员追踪必须关闭；开启后同一群不同成员使用不同 UMO，发令者建立的租约无法命中另一成员的消息 |
 | 白名单、原生 `platform_settings.rate_limit` | 仍在 AstrBot 原生流水线生效；插件默认不限频不等于关闭 AstrBot 原生限流 |
-| `plugin_set`、会话插件开关、独立工具开关 | 可分别让事件处理器或工具不可达，修改后必须核对四个工具仍可见 |
+| `plugin_set`、会话插件开关、独立工具开关 | 可分别让事件处理器或工具不可达，修改后必须核对五个工具仍可见 |
+| 操作工具的原生权限 | 获授权普通成员使用时，`manage_sender_activation`、`manage_sender_activation_rate`、`manage_heartbeat_lease` 必须为 `member`；插件再按当前群的授权表做指定 ID 校验 |
 
 `target_ids` 只接受真实数字 QQ ID，不接受 `current_sender`、昵称或其他占位符。
 插件页面会只读显示这些关键项的当前生效状态，不会替管理员修改 AstrBot
@@ -153,7 +156,7 @@ AstrBot 原生机制发生的私聊 Agent 请求中检测当前 UMO 的生效配
 
 1. 打开“插件管理”。
 2. 使用仓库 URL 安装，或上传经验证的精简运行 ZIP。
-3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.1.0rc11`。
+3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.1.0rc13`。
 4. 在插件配置中检查对象激活、心跳、容量和限频上限。
 5. 打开插件详情中的“管理员的真理捍卫器控制台”页面，确认 `storage_ready` 为 `true`。
 
@@ -173,6 +176,7 @@ https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation
 - “每十分钟重新审视一次这场争论；只有证据或论证真的有问题时才介入。”
 - “这个人刷得太快，每二十秒最多给他一次额外判断机会，持续一小时。”
 - “争论结束了，撤销刚才的跟进和巡检，恢复原样。”
+- 管理员：“允许 QQ 123456789 在这个群使用本插件 30 天。”
 
 下面这些语境不应调用：
 
@@ -187,6 +191,18 @@ https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation
 
 ## 工具
 
+### `manage_sender_activation_access`
+
+```text
+action: grant | renew | revoke | list
+operator_ids: 获得当前群插件操作权的 QQ ID 数组
+duration_seconds: grant/renew 的有限秒数；0 使用默认 30 天
+```
+
+只有 AstrBot 原生管理员能授予、续期、撤销或查看授权。普通插件操作员不能
+转授权；授权只在当前事件派生的 UMO 内生效，最长 365 天。自然语言由主 Agent
+理解后转成正式工具帧，插件不监听“授权”等词。
+
 ### `manage_sender_activation`
 
 ```text
@@ -195,9 +211,10 @@ target_ids: QQ ID 数组
 duration_seconds: enable/renew 的有限秒数；0 使用配置中的默认值
 ```
 
-正式工具帧的行动主体是 AstrBot 原生主 Agent，不按当前消息发送者的管理员
-身份二次限权。主 Agent 可在当前事件确定的 UMO 内管理任意合法目标；作用域
-永远取自当前事件，不允许模型传入或伪造。
+管理员和当前群的获授权操作员可管理任意合法目标；未授权成员不能借主 Agent
+扩大插件状态。任何正式主 Agent 回合仍可撤销异常激活、终止心跳或设置临时
+限频，但不能借收敛权新增、续期、清除限频或转授权。作用域永远取自当前事件，
+不允许模型传入。
 
 ### `manage_sender_activation_rate`
 
@@ -252,6 +269,10 @@ reason: 可选的当前语境理由，不向群聊显示
 | `activation_max_seconds` | `31536000` | 激活租约硬上限 365 天 |
 | `max_targets_per_scope` | `20` | 每个 UMO 同时激活的目标上限 |
 | `max_targets_total` | `500` | 插件全局激活租约容量 |
+| `operator_access_default_seconds` | `2592000` | 省略授权期限时使用 30 天 |
+| `operator_access_max_seconds` | `31536000` | 操作员授权硬上限 365 天 |
+| `max_operators_per_scope` | `50` | 每个 UMO 同时授权的操作员上限 |
+| `max_operators_total` | `1000` | 全部 UMO 的操作员授权容量 |
 | `rate_max_duration_seconds` | `86400` | 限频租约最长 24 小时 |
 | `rate_max_activations` | `1000` | 单个窗口允许的额外激活次数上限 |
 | `rate_max_window_seconds` | `86400` | 单个滑动窗口最长 24 小时 |
@@ -290,13 +311,16 @@ reason: 可选的当前语境理由，不向群聊显示
 
 Plugin Page 使用 AstrBot 注入的 `window.AstrBotPluginPage`：
 
-- 前端只调用 `bridge.apiGet("state")`、`bridge.apiPost("activation")`、
-  `bridge.apiPost("rate")` 和 `bridge.apiPost("heartbeat")`。
+- 前端只调用 `bridge.apiGet("state")`、`bridge.apiPost("access")`、
+  `bridge.apiPost("activation")`、`bridge.apiPost("rate")` 和
+  `bridge.apiPost("heartbeat")`。
 - 页面与 LLM 工具复用同一个应用服务，不复制业务逻辑。
 - 页面关闭后插件保持无头运行。
 - 页面只使用现有租约派生的 `scope_ref`，不接收或展示原始 UMO。
 - 页面通过现有 `state` API 只读显示默认配置或所选作用域的生效配置；前缀
   只显示“留空/已填写”，不回显其内容。
+- 页面只读检测三个操作工具的 AstrBot 原生权限；若仍为 `admin`，会明确提示
+  该设置在插件授权检查之前阻断普通操作员。
 - 首个作用域租约必须由当前会话中的正式 Agent 工具帧建立。
 - 首版页面一次只显示和管理一个作用域；写操作使用页面内影响预览确认，不依赖受限 iframe 中不可用的浏览器原生确认框；批量变更还必须勾选二次确认。
 
@@ -310,7 +334,7 @@ Plugin Page 使用 AstrBot 注入的 `window.AstrBotPluginPage`：
 2. 不存在私有模型调用、Provider 选择、私有调度器或任意输出改写；唯一输出
    抑制是主 Agent 正式调用 `yield_current_turn` 后对当前主动回合的局部让出。
 3. 写入失败时未提交状态不可见，无法确认的结果明确标为未知并要求重载核对。
-4. 四条 Page API 在手机和桌面、明暗主题下可用，关闭页面后仍可运行。
+4. 五条 Page API 在手机和桌面、明暗主题下可用，关闭页面后仍可运行。
 5. 干净克隆可复现测试与确定性 ZIP。
 6. 不说“插件”的自然语言仍能稳定产生正确工具帧。
 7. 取得 AstrBot Trace、结构化日志、WebUI 和 QQ 可见结果四层证据。

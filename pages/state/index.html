@@ -34,6 +34,10 @@
           <strong id="heartbeat-count">0</strong>
         </div>
         <div>
+          <span class="label">全局操作员授权</span>
+          <strong id="access-count">0</strong>
+        </div>
+        <div>
           <span class="label">隔离记录</span>
           <strong id="quarantine-count">0</strong>
         </div>
@@ -76,6 +80,21 @@
         </p>
       </section>
 
+      <section class="section" aria-label="AstrBot 工具权限检测">
+        <div class="section-heading">
+          <h2>AstrBot 工具权限检测</h2>
+          <strong id="tool-permission-status" class="host-config-summary unknown"
+            >未检测</strong
+          >
+        </div>
+        <p class="scope-note">
+          指定成员要使用插件，三个操作工具必须在 AstrBot 扩展组件中保持
+          <code>member</code>；具体 ID 是否有权由下面的插件授权表判断。
+          检测只读，不会修改 AstrBot 设置。
+        </p>
+        <div id="tool-permission-rows" class="host-config-grid"></div>
+      </section>
+
       <section class="section">
         <div class="section-heading">
           <h2>作用域</h2>
@@ -95,6 +114,65 @@
         <p class="scope-note">
           当前会话插件状态：<strong id="session-status">未选择作用域</strong>
         </p>
+      </section>
+
+      <section class="section">
+        <div class="section-heading">
+          <h2>插件操作员授权</h2>
+          <span id="access-row-count" class="muted">0 条</span>
+        </div>
+        <p class="scope-note">
+          只授予当前群内使用本插件的权限，不授予 AstrBot 管理员、其他插件或
+          跨群权限。授权到期后自动失效。
+        </p>
+        <form id="access-form" class="form-grid">
+          <label>
+            <span>操作</span>
+            <select id="access-action">
+              <option value="grant">授予</option>
+              <option value="renew">续期</option>
+              <option value="revoke">撤销</option>
+            </select>
+          </label>
+          <label class="wide">
+            <span>QQ ID</span>
+            <input
+              id="access-targets"
+              type="text"
+              inputmode="numeric"
+              autocomplete="off"
+              placeholder="多个 ID 用空格或逗号分隔"
+              required
+            />
+          </label>
+          <label>
+            <span>有效期（秒）</span>
+            <input
+              id="access-duration"
+              type="number"
+              min="0"
+              step="1"
+              value="2592000"
+            />
+          </label>
+          <div class="form-action">
+            <button type="submit">应用</button>
+          </div>
+        </form>
+        <div id="access-table-wrap" class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>QQ ID</th>
+                <th>剩余时间</th>
+                <th>授权者</th>
+                <th class="actions-column">操作</th>
+              </tr>
+            </thead>
+            <tbody id="access-rows"></tbody>
+          </table>
+        </div>
+        <div id="access-empty" class="empty-state">暂无操作员授权</div>
       </section>
 
       <section class="section">
