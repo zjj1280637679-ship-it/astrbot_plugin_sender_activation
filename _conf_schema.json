@@ -11,6 +11,12 @@
     "default": 31536000,
     "hint": "硬上限为 365 天。"
   },
+  "activation_min_interval_seconds": {
+    "description": "同一目标两次额外激活的最小间隔（秒）",
+    "type": "float",
+    "default": 120.0,
+    "hint": "首条立即激活；间隔内只保留无内容的最新事件预约，到固定截止时间仅最新事件获得一次机会。0 表示兼容旧版逐条激活，范围 0 至 1800 秒。"
+  },
   "max_targets_per_scope": {
     "description": "每个 UMO 最多同时激活的 QQ ID 数",
     "type": "int",

@@ -45,12 +45,27 @@ def _choice(
     return value if value in choices else default
 
 
+def _float(
+    config: Any,
+    key: str,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    try:
+        value = float(_value(config, key, default))
+    except (TypeError, ValueError, OverflowError):
+        value = default
+    return max(minimum, min(value, maximum))
+
+
 @dataclass(frozen=True)
 class PluginSettings:
     limits: Limits
     heartbeat_limits: HeartbeatLimits = field(default_factory=HeartbeatLimits)
     access_limits: AccessLimits = field(default_factory=AccessLimits)
     host_config_notice_mode: str = "page_and_agent"
+    activation_min_interval_seconds: float = 120.0
 
     @classmethod
     def from_config(cls, config: Any) -> PluginSettings:
@@ -183,5 +198,12 @@ class PluginSettings:
                 "host_config_notice_mode",
                 "page_and_agent",
                 frozenset({"page_only", "page_and_agent"}),
+            ),
+            activation_min_interval_seconds=_float(
+                config,
+                "activation_min_interval_seconds",
+                120.0,
+                0.0,
+                1800.0,
             ),
         )

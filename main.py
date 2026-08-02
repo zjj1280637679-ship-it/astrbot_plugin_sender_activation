@@ -22,6 +22,7 @@ from .access_service import (
     ACCESS_STATE_KEY,
     AccessService,
 )
+from .activation_reservation import ActivationReservationCoordinator
 from .cron_adapter import AstrBotCronAdapter
 from .domain import DomainError, normalize_scope
 from .heartbeat_domain import HEARTBEAT_TAG, is_owned_heartbeat_payload
@@ -43,7 +44,7 @@ from .settings import PluginSettings
 from .storage import AstrBotKVStateStore
 
 PLUGIN_NAME = "astrbot_plugin_sender_activation"
-VERSION = "1.1.0rc13"
+VERSION = "1.1.0rc14"
 DECISION_EXTRA = "sender_activation_decision"
 RECOVERY_REPORT_EXTRA = "sender_activation_recovery_report"
 TURN_YIELD_EXTRA = "sender_activation_turn_yield"
@@ -316,6 +317,10 @@ class SenderActivationPlugin(Star):
             self.settings,
             AstrBotCronAdapter(context),
         )
+        self.activation_reservations = ActivationReservationCoordinator(
+            self.settings.activation_min_interval_seconds,
+            max_slots=self.settings.limits.max_targets_total,
+        )
         self.session_gate = AstrBotSessionGate(PLUGIN_NAME, sp)
         self._terminated = False
         self._yield_count = 0
@@ -350,6 +355,7 @@ class SenderActivationPlugin(Star):
         global _ACTIVE_PLUGIN
 
         self._terminated = True
+        self.activation_reservations.close()
         heartbeat_failures = await self.heartbeat_service.terminate()
         if heartbeat_failures:
             logger.warning(
@@ -633,10 +639,32 @@ class SenderActivationPlugin(Star):
             sender = self._sender(event)
             if event.is_at_or_wake_command:
                 return
+            reservation = await self.activation_reservations.reserve(scope, sender)
+            if not reservation.released or reservation.permit is None:
+                logger.debug(
+                    "[sender_activation] reservation=%s scope=%s sender=%s",
+                    reservation.reason,
+                    self.service.scope_ref(scope),
+                    _mask_identifier(sender),
+                )
+                return
+            permit = reservation.permit
+            committed = False
             decision = self.service.decide(
                 scope,
                 sender,
             )
+            committed = self.activation_reservations.commit(
+                permit,
+                admitted=decision.admitted,
+            )
+            if not committed:
+                logger.warning(
+                    "[sender_activation] reservation_commit_stale scope=%s sender=%s",
+                    self.service.scope_ref(scope),
+                    _mask_identifier(sender),
+                )
+                return
             if not decision.admitted:
                 return
             event.set_extra(DECISION_EXTRA, decision.as_dict())
@@ -649,11 +677,17 @@ class SenderActivationPlugin(Star):
                 _mask_identifier(decision.target_id),
             )
         except DomainError as exc:
+            permit = locals().get("permit")
+            if permit is not None and not locals().get("committed", False):
+                self.activation_reservations.commit(permit, admitted=False)
             logger.debug(
                 "[sender_activation] inert activation_error=%s",
                 exc.code,
             )
         except Exception:
+            permit = locals().get("permit")
+            if permit is not None and not locals().get("committed", False):
+                self.activation_reservations.commit(permit, admitted=False)
             logger.exception("[sender_activation] inert unexpected_activation_error")
 
     @filter.on_llm_request()
@@ -1187,6 +1221,7 @@ class SenderActivationPlugin(Star):
                 **self.service.health(),
                 **self.access_service.health(),
                 **await self.heartbeat_service.health(),
+                **self.activation_reservations.health(),
                 "turn_yield_count": self._yield_count,
             }
             return json_response(
