@@ -1,5 +1,6 @@
 <h1 align="center">管理员的真理捍卫器</h1>
 <p align="center"><strong>用这款 AstrBot 插件，让你的 AI 获得限时免@的主动回复能力：该反驳就反驳，该沉默就沉默。</strong></p>
+<p align="center"><strong>让你的 AI 为你战斗到底。</strong></p>
 
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26.1%2C%3C4.27-6b63ff)](https://github.com/AstrBotDevs/AstrBot)
@@ -16,9 +17,9 @@
 - **定时巡查群聊**：用原生 Cron 心跳定时唤醒主 Agent，检查当时可见的群聊上下文。
 - **群聊监控中的主动沉默**：激活不等于强制回复，没有有效增量时由 AI 正式让出话轮。
 
-> **候选版说明：** `1.1.0-rc.14` 在既有运行态投影上增加“首条立即、窗口末尾
-> 最新一条”的额外激活预约，避免刷屏按条消耗主 Agent 调用。内部插件 ID、
-> 数据命名空间和工具接口保持不变。
+> **候选版说明：** `1.1.0-rc.15` 仅在 `1.1.0-rc.14` 上补充公开标题区和
+> 插件介绍广告语。插件逻辑、内部插件 ID、数据命名空间、配置和工具接口均
+> 保持不变。
 
 > **运行边界：** 首版运行域严格等于 `aiocqhttp` 群聊。其他平台和私聊事件
 > 保持原样；若主 Agent 在这些语境调用管理工具，插件返回结构化不支持错误，
