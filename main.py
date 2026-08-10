@@ -44,7 +44,7 @@ from .settings import PluginSettings
 from .storage import AstrBotKVStateStore
 
 PLUGIN_NAME = "astrbot_plugin_sender_activation"
-VERSION = "1.1.0-rc.17"
+VERSION = "1.1.0-rc.18"
 DECISION_EXTRA = "sender_activation_decision"
 RECOVERY_REPORT_EXTRA = "sender_activation_recovery_report"
 TURN_YIELD_EXTRA = "sender_activation_turn_yield"
@@ -222,6 +222,8 @@ def _tool_error(error: DomainError, tool: str) -> str:
             "error_code": error.code,
             "failure_class": failure_class,
             "recovery_action": recovery_action,
+            "recovery_action_executed": False,
+            "automatic_retry_scheduled": False,
             "same_call_retryable": same_call_retryable,
             "tool": tool,
             "message": error.message,
