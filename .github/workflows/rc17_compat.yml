@@ -18,10 +18,10 @@ jobs:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
+      - name: Runtime info
+        run: |
+          python --version
+          python -m pip --version
 
       - name: Fetch current AstrBot
         run: |
