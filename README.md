@@ -3,7 +3,7 @@
 <p align="center"><strong>让你的 AI 为你战斗到底。</strong></p>
 
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
-[![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26.1%2C%3C4.27-6b63ff)](https://github.com/AstrBotDevs/AstrBot)
+[![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26.1-6b63ff)](https://github.com/AstrBotDevs/AstrBot)
 [![Platform](https://img.shields.io/badge/platform-aiocqhttp-2f855a)](https://docs.astrbot.app/en/dev/star/plugin-new.html)
 
 > **让该被追问的发言得到反驳，让没有增量的接话归于沉默。**
@@ -17,9 +17,21 @@
 - **定时巡查群聊**：用原生 Cron 心跳定时唤醒主 Agent，检查当时可见的群聊上下文。
 - **群聊监控中的主动沉默**：激活不等于强制回复，没有有效增量时由 AI 正式让出话轮。
 
-> **候选版说明：** `1.1.0-rc.15` 仅在 `1.1.0-rc.14` 上补充公开标题区和
-> 插件介绍广告语。插件逻辑、内部插件 ID、数据命名空间、配置和工具接口均
-> 保持不变。
+## Skills-like 两阶段适配
+
+`1.1.0-rc.17` 针对 AstrBot 的 `Skills-like（两阶段）` 工具模式做了原生适配：
+
+- 第一阶段只需要看到五个工具的短名称和精简用途，不再常驻整段执行手册；
+- 第二阶段在模型选中工具后再提供参数 Schema；
+- 插件同时在 `skills/` 中提供三个 AstrBot 原生 Skill：对象持续关注、周期心跳、插件操作员授权；
+- Skill 初始只暴露名称和触发描述，命中后才加载 `SKILL.md` 的详细流程与边界；
+- `Full（完整参数）` 模式继续兼容，工具名、参数、权限检查和运行效果不变。
+
+因此两阶段优化只改变**给模型展示说明的时机和密度**，不改变租约执行层。若人格明确配置为“不使用任何 Skills”，五个 Tool 仍可按 AstrBot 的工具模式正常工作，只是不再获得按需加载的 Skill 操作手册。
+
+> **候选版说明：** `1.1.0-rc.17` 在解除 AstrBot 版本上限的基础上，加入
+> AstrBot 原生插件 Skills，并针对 `Skills-like（两阶段）` 模式压缩五个工具的
+> 第一阶段描述。租约、权限、状态存储、Web API 与工具参数接口保持不变。
 
 > **运行边界：** 首版运行域严格等于 `aiocqhttp` 群聊。其他平台和私聊事件
 > 保持原样；若主 Agent 在这些语境调用管理工具，插件返回结构化不支持错误，
@@ -117,7 +129,7 @@ QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插�
 
 | 项目 | 支持范围 |
 | --- | --- |
-| AstrBot | `>=4.26.1,<4.27` |
+| AstrBot | `>=4.26.1` |
 | Python | 跟随目标 AstrBot 版本，CI 使用 Python 3.12 |
 | 平台适配器 | 仅 `aiocqhttp` |
 | 私聊 | 不建立租约、不额外唤醒；可只读检测当前会话生效的宿主配置 |
@@ -157,7 +169,7 @@ AstrBot 原生机制发生的私聊 Agent 请求中检测当前 UMO 的生效配
 
 1. 打开“插件管理”。
 2. 使用仓库 URL 安装，或上传经验证的精简运行 ZIP。
-3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.1.0-rc.14`。
+3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.1.0-rc.17`。
 4. 在插件配置中检查对象激活、心跳、容量和限频上限。
 5. 打开插件详情中的“管理员的真理捍卫器控制台”页面，确认 `storage_ready` 为 `true`。
 
