@@ -44,7 +44,7 @@ from .settings import PluginSettings
 from .storage import AstrBotKVStateStore
 
 PLUGIN_NAME = "astrbot_plugin_sender_activation"
-VERSION = "1.1.0-rc.16"
+VERSION = "1.1.0-rc.15"
 DECISION_EXTRA = "sender_activation_decision"
 RECOVERY_REPORT_EXTRA = "sender_activation_recovery_report"
 TURN_YIELD_EXTRA = "sender_activation_turn_yield"
@@ -103,7 +103,8 @@ _TOOL_ERROR_POLICIES: dict[str, tuple[str, str, bool]] = {
     "access_storage_write_failed": (
         "storage",
         "retry_after_access_storage_recovery",
-        True),
+        True,
+    ),
     "access_commit_indeterminate": (
         "storage",
         "reload_and_inspect_operator_access",
