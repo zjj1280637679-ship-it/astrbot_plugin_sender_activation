@@ -1,0 +1,59 @@
+name: rc17 real Agent E2E
+
+on:
+  push:
+    branches:
+      - agent/rc17-agent-e2e
+
+permissions:
+  contents: read
+
+jobs:
+  agent-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ARK_API_KEY: ${{ secrets.HUOSHANYINQINGAPI }}
+      ARK_MODEL: doubao-seed-2-0-pro-260215
+      ARK_BASE_URL: https://ark.cn-beijing.volces.com/api/v3
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secret without exposing it
+        shell: bash
+        run: |
+          test -n "$ARK_API_KEY" || { echo 'HUOSHANYINQINGAPI secret is unavailable'; exit 2; }
+          echo 'Ark API secret is present.'
+
+      - name: Runtime info
+        run: |
+          python --version
+          python -m pip --version
+
+      - name: Install AstrBot 4.27.2 runtime
+        shell: bash
+        run: |
+          git clone --depth 1 --branch master https://github.com/AstrBotDevs/AstrBot.git /tmp/AstrBot
+          python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('/tmp/AstrBot/pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+          print('AstrBot source version:', version)
+          assert version == '4.27.2', version
+          PY
+          python -m pip install --user -e /tmp/AstrBot
+
+      - name: Run Full vs Skills-like real-model benchmark
+        run: |
+          python .github/rc17_agent_e2e.py | tee rc17_agent_e2e.log
+
+      - name: Upload empirical report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc17-agent-e2e-report
+          path: |
+            rc17_agent_e2e_report.json
+            rc17_agent_e2e.log
+          if-no-files-found: warn
