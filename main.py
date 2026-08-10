@@ -819,7 +819,7 @@ class SenderActivationPlugin(Star):
         operator_ids: list[str] | None = None,
         duration_seconds: int = 0,
     ) -> str:
-        """由 AstrBot 管理员管理当前群聊的有限期插件操作员授权。仅在管理员明确要求授予、续期、撤销或查询某个真实 QQ ID 的本插件操作权时调用；不要用于实际建立对象关注、限频或心跳，也不要把讨论、引用、假设或转述当成授权变更。详细流程与权限边界见 sender-activation-access Skill。收到 status=ok 前不得声称授权已改变。
+        """由 AstrBot 管理员管理当前群聊的有限期插件操作员授权。仅在管理员明确要求授予、续期、撤销或查询某个真实 QQ ID 的本插件操作权时调用；不要用于实际建立对象关注、限频或心跳，也不要把讨论、引用、假设或转述当成授权变更。详细流程与权限边界见 group-duty-orchestration Skill。收到 status=ok 前不得声称授权已改变。
 
         Args:
             action(string): grant、renew、revoke 或 list。
@@ -855,7 +855,7 @@ class SenderActivationPlugin(Star):
         target_ids: list[str] | None = None,
         duration_seconds: int = 0,
     ) -> str:
-        """管理指定 QQ 用户未来普通群消息对当前群聊主 Agent 的有限期额外可达性。明确要求跨越当前话轮、目标可确定且未来消息可能没有 @/引用/唤醒词时才 enable 或 renew；停止用 disable，状态查询用 list。功能讨论、否定、引用、假设、转述和单轮回复不要调用；target_ids 只接受可验证的真实数字 QQ ID。详细规则见 sender-activation Skill。收到 status=ok 前不得声称状态已改变，并按 effect_state 与 recovery_action 处理结果。
+        """管理指定 QQ 用户未来普通群消息对当前群聊主 Agent 的有限期额外可达性。明确要求跨越当前话轮、目标可确定且未来消息可能没有 @/引用/唤醒词时才 enable 或 renew；停止用 disable，状态查询用 list。功能讨论、否定、引用、假设、转述和单轮回复不要调用；target_ids 只接受可验证的真实数字 QQ ID。详细规则见 group-duty-orchestration Skill。收到 status=ok 前不得声称状态已改变，并按 effect_state 与 recovery_action 处理结果。
 
         Args:
             action(string): enable、renew、disable 或 list。
@@ -904,7 +904,7 @@ class SenderActivationPlugin(Star):
         window_seconds: float = 0,
         duration_seconds: int = 0,
     ) -> str:
-        """只为已有对象激活租约设置、清除或查询本插件新增唤醒的有限期限频，不影响 AstrBot 原生 @、引用、唤醒词、命令或普通会话。明确需要临时限制额外激活且参数完整时 set，恢复正常额外激活频率时 clear，查询时 list。详细规则见 sender-activation Skill。收到 status=ok 前不得声称限频已改变。
+        """只为已有对象激活租约设置、清除或查询本插件新增唤醒的有限期限频，不影响 AstrBot 原生 @、引用、唤醒词、命令或普通会话。明确需要临时限制额外激活且参数完整时 set，恢复正常额外激活频率时 clear，查询时 list。详细规则见 group-duty-orchestration Skill。收到 status=ok 前不得声称限频已改变。
 
         Args:
             action(string): set、clear 或 list。
@@ -958,7 +958,7 @@ class SenderActivationPlugin(Star):
         instruction: str = "",
         duration_seconds: int = 0,
     ) -> str:
-        """管理当前群聊中复用 AstrBot 原生 Cron 的有限期心跳租约。明确要求按时间周期或时点让主 Agent 在未来重审群聊时 create/renew，停止时 disable，查询时 list；按某个发言者消息触发应使用对象激活而不是心跳。心跳只提供判断机会，不保证回复。详细规则见 group-heartbeat Skill。收到 status=ok 前不得声称状态已改变。
+        """管理当前群聊中复用 AstrBot 原生 Cron 的有限期心跳租约。明确要求按时间周期或时点让主 Agent 在未来重审群聊时 create/renew，停止时 disable，查询时 list；按某个发言者消息触发应使用对象激活而不是心跳。心跳只提供判断机会，不保证回复。详细规则见 group-duty-orchestration Skill。收到 status=ok 前不得声称状态已改变。
 
         Args:
             action(string): create、renew、disable 或 list。
@@ -1010,7 +1010,7 @@ class SenderActivationPlugin(Star):
         event: AstrMessageEvent,
         reason: str = "",
     ) -> str | None:
-        """仅在本插件对象激活或心跳额外唤醒的当前 Agent 回合中，结构化结束本轮且不发送可见回复。当前没有独立公开价值时使用；普通 @、原生会话或其他插件唤醒不可用。成功调用必须作为当前工具选择中的唯一且最后一个调用。详细规则见 sender-activation 或 group-heartbeat Skill。
+        """仅在本插件对象激活或心跳额外唤醒的当前 Agent 回合中，结构化结束本轮且不发送可见回复。当前没有独立公开价值时使用；普通 @、原生会话或其他插件唤醒不可用。成功调用必须作为当前工具选择中的唯一且最后一个调用。详细规则见 sender-activation 或 group-duty-orchestration Skill。
 
         Args:
             reason(string): 可选的简短语境理由，不面向群聊显示。
