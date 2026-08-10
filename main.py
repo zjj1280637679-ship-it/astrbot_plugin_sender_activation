@@ -44,7 +44,7 @@ from .settings import PluginSettings
 from .storage import AstrBotKVStateStore
 
 PLUGIN_NAME = "astrbot_plugin_sender_activation"
-VERSION = "1.1.0-rc.15"
+VERSION = "1.1.0-rc.16"
 DECISION_EXTRA = "sender_activation_decision"
 RECOVERY_REPORT_EXTRA = "sender_activation_recovery_report"
 TURN_YIELD_EXTRA = "sender_activation_turn_yield"
@@ -1110,7 +1110,7 @@ class SenderActivationPlugin(Star):
             result = await self.heartbeat_service.manage(
                 actor=actor,
                 scope=scope,
-                scope_ref=self.service.scope_ref(scope),
+                scope_ref=self.service.scope_ref,
                 action=action,
                 lease_ids=lease_ids,
                 name=name,
@@ -1337,7 +1337,7 @@ class SenderActivationPlugin(Star):
             result = await self.heartbeat_service.manage(
                 actor=actor,
                 scope=scope,
-                scope_ref=self.service.scope_ref(scope),
+                scope_ref=self.service.scope_ref,
                 action=action,
                 lease_ids=body.get("lease_ids", []),
                 name=body.get("name", ""),
