@@ -1,0 +1,46 @@
+name: rc18 recovery facts patch
+
+on:
+  push:
+    branches:
+      - agent/rc18-recovery-facts
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Apply rc18 patch and validate source
+        run: |
+          python .github/rc18_patch.py
+          python - <<'PY'
+          import ast, json
+          from pathlib import Path
+          text = Path('main.py').read_text(encoding='utf-8')
+          ast.parse(text)
+          assert text.count('"recovery_action_executed": False') == 1
+          assert text.count('"automatic_retry_scheduled": False') == 1
+          assert 'VERSION = "1.1.0-rc.18"' in text
+          metadata = Path('metadata.yaml').read_text(encoding='utf-8')
+          assert 'version: "1.1.0-rc.18"' in metadata
+          assert 'astrbot_version: ">=4.26.1"' in metadata
+          PY
+          git diff --check
+
+      - name: Commit clean rc18 source diff
+        run: |
+          rm .github/rc18_patch.py .github/workflows/rc18_patch.yml
+          git add main.py metadata.yaml README.md skills/group-duty-orchestration/SKILL.md .github/rc18_patch.py .github/workflows/rc18_patch.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: make recovery scheduling facts explicit'
+          git push origin HEAD:${{ github.ref_name }}
