@@ -103,8 +103,7 @@ _TOOL_ERROR_POLICIES: dict[str, tuple[str, str, bool]] = {
     "access_storage_write_failed": (
         "storage",
         "retry_after_access_storage_recovery",
-        True,
-    ),
+        True),
     "access_commit_indeterminate": (
         "storage",
         "reload_and_inspect_operator_access",
@@ -1110,7 +1109,7 @@ class SenderActivationPlugin(Star):
             result = await self.heartbeat_service.manage(
                 actor=actor,
                 scope=scope,
-                scope_ref=self.service.scope_ref,
+                scope_ref=self.service.scope_ref(scope),
                 action=action,
                 lease_ids=lease_ids,
                 name=name,
@@ -1337,7 +1336,7 @@ class SenderActivationPlugin(Star):
             result = await self.heartbeat_service.manage(
                 actor=actor,
                 scope=scope,
-                scope_ref=self.service.scope_ref,
+                scope_ref=self.service.scope_ref(scope),
                 action=action,
                 lease_ids=body.get("lease_ids", []),
                 name=body.get("name", ""),
