@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT.parent) not in sys.path:
     sys.path.insert(0, str(ROOT.parent))
 
+from astrbot_plugin_sender_activation.domain import DomainError  # noqa: E402
 from astrbot_plugin_sender_activation.heartbeat_domain import (  # noqa: E402
     HeartbeatLease,
     heartbeat_payload,
@@ -40,6 +41,7 @@ class Manager:
         self.handlers: dict[str, Any] = {}
         self.next_id = 1
         self.run_calls: list[str] = []
+        self.fail_delete_ids: set[str] = set()
 
     async def add_basic_job(self, *, handler, **kwargs):
         jid = f"basic-{self.next_id}"
@@ -64,6 +66,8 @@ class Manager:
         return [*self.basic.values(), *self.active.values()]
 
     async def delete_job(self, job_id):
+        if job_id in self.fail_delete_ids:
+            raise OSError("simulated delete failure")
         self.basic.pop(job_id, None)
         self.active.pop(job_id, None)
         self.handlers.pop(job_id, None)
@@ -145,6 +149,35 @@ async def main() -> None:
     gate2 = HeartbeatWakeGate(manager, preflight=lambda _scope: True, wall_clock=lambda: 1100.0)
     await gate2.initialize()
     assert not any(j.job_id in stale_driver_ids for j in manager.basic.values())
+
+    # Counterexample: if a stale driver cannot be deleted during hot reload,
+    # initialization must fail closed instead of arming a duplicate driver.
+    stale_failure_manager = Manager()
+    stale_failure_manager.active["hb-stale"] = Job(
+        job_id="hb-stale",
+        payload=active_payload(expires=2100.0),
+        enabled=False,
+        cron_expression="*/5 * * * *",
+    )
+    old_gate = HeartbeatWakeGate(stale_failure_manager, preflight=lambda _scope: True, wall_clock=lambda: 1100.0)
+    await old_gate.initialize()
+    await old_gate.arm(lease("hb-stale", expires=2100.0))
+    stale_ids = {j.job_id for j in stale_failure_manager.basic.values() if DRIVER_TAG in j.payload}
+    assert len(stale_ids) == 1
+    stale_failure_manager.fail_delete_ids |= stale_ids
+    new_gate = HeartbeatWakeGate(stale_failure_manager, preflight=lambda _scope: True, wall_clock=lambda: 1100.0)
+    try:
+        await new_gate.initialize()
+    except DomainError as exc:
+        assert exc.code == "heartbeat_preflight_reconcile_failed"
+    else:
+        raise AssertionError("duplicate-driver reconcile unexpectedly succeeded")
+    assert new_gate._active is False
+    assert {j.job_id for j in stale_failure_manager.basic.values() if DRIVER_TAG in j.payload} == stale_ids
+    # The old gate can be made inert even if its native row is temporarily undeletable.
+    old_gate._active = False
+    stale_failure_manager.fail_delete_ids.clear()
+    await old_gate.terminate()
 
     # Explicit disarm is scoped to one parent and removes both driver and cleanup.
     await gate2.arm(lease("hb-2", expires=2100.0))
