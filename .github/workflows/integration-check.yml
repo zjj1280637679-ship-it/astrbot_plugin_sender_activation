@@ -2,20 +2,6 @@ name: integration check
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - main.py
-      - settings.py
-      - attention_domain.py
-      - attention_service.py
-      - echo_service.py
-      - heartbeat_domain.py
-      - heartbeat_gate.py
-      - heartbeat_service.py
-      - cron_adapter.py
-      - tests/test_heartbeat_truth.py
-      - tests/test_astrbot_runtime.py
-      - .github/workflows/integration-check.yml
   push:
     branches: [main]
     paths:
