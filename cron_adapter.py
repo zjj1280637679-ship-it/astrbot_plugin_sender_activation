@@ -23,8 +23,9 @@ CLEANUP_KIND = "finite_heartbeat_native_cleanup"
 class AstrBotCronAdapter:
 
 
-    def __init__(self, context: Any) -> None:
+    def __init__(self, context: Any, *, active_execution_enabled: bool = True) -> None:
         self._manager = getattr(context, "cron_manager", None)
+        self._active_execution_enabled = bool(active_execution_enabled)
 
     def _require_manager(self) -> Any:
         manager = self._manager
@@ -165,7 +166,7 @@ class AstrBotCronAdapter:
                 cron_expression=cron_expression,
                 payload=payload,
                 description="本插件有限期心跳租约；由 AstrBot 原生主 Agent 执行。",
-                enabled=True,
+                enabled=self._active_execution_enabled,
                 persistent=False,
                 run_once=False,
             )
@@ -222,7 +223,7 @@ class AstrBotCronAdapter:
             source=source,
             plugin_suspended=False,
         )
-        enabled = bool(getattr(raw, "enabled", False))
+        enabled = self._active_execution_enabled
         try:
             updated = await manager.update_job(
                 lease.lease_id,
@@ -322,7 +323,11 @@ class AstrBotCronAdapter:
                 continue
             payload = dict(getattr(raw, "payload", {}) or {})
             tag = dict(payload.get(HEARTBEAT_TAG, {}) or {})
-            should_enable = lease.enabled or lease.plugin_suspended
+            should_enable = (
+                (lease.enabled or lease.plugin_suspended)
+                if self._active_execution_enabled
+                else False
+            )
             if lease.plugin_suspended:
                 tag["plugin_suspended"] = False
                 payload[HEARTBEAT_TAG] = tag
@@ -356,7 +361,7 @@ class AstrBotCronAdapter:
         for cleanup in await self.raw_cleanup_jobs():
             await self._delete_quietly(getattr(cleanup, "job_id", ""))
         for job in await self.raw_owned_jobs():
-            if not bool(getattr(job, "enabled", False)):
+            if self._active_execution_enabled and not bool(getattr(job, "enabled", False)):
                 continue
             job_id = str(getattr(job, "job_id", "") or "")
             payload = dict(getattr(job, "payload", {}) or {})

@@ -29,6 +29,164 @@
     "default": 500,
     "hint": "限制所有 UMO 的激活租约总数，避免状态无界增长。"
   },
+  "agent_ignore_enabled": {
+    "description": "允许主 Agent 管理有限期对象忽略策略",
+    "type": "bool",
+    "default": false,
+    "hint": "关闭时不会新增忽略策略。开启后，主 Agent 可按对象 ID + 计数 + 时间窗口建立有限期前置忽略；是否授权由部署者决定，不根据模型名称自动判断。"
+  },
+  "ignore_native_wake_mode": {
+    "description": "对象忽略命中原生 @/引用/唤醒时的处理强度",
+    "type": "string",
+    "default": "extra_only",
+    "options": ["extra_only", "suppress_llm", "stop_event"],
+    "labels": ["仅阻断本插件额外激活", "阻断默认 LLM、保留其他插件", "停止整个事件传播"],
+    "hint": "extra_only 最保守，不拦原生 @；suppress_llm 仅取消默认 LLM 唤醒，其他插件处理器仍可运行；stop_event 最省资源但会同时阻断后续插件。由用户选择公平性与成本边界。"
+  },
+  "ignore_default_seconds": {
+    "description": "忽略命中后的默认持续时间（秒）",
+    "type": "int",
+    "default": 600,
+    "hint": "默认 10 分钟。忽略始终有限期，不提供永久对象忽略。"
+  },
+  "ignore_max_seconds": {
+    "description": "单次忽略持续时间可配置上限（秒）",
+    "type": "int",
+    "default": 86400,
+    "hint": "默认最多 24 小时；部署者可根据模型和成本策略调整。"
+  },
+  "ignore_policy_default_seconds": {
+    "description": "对象忽略策略默认存活时间（秒）",
+    "type": "int",
+    "default": 3600,
+    "hint": "策略存在期间才累计匹配事件；策略到期后自动 fail-open。"
+  },
+  "ignore_policy_max_seconds": {
+    "description": "对象忽略策略最长存活时间（秒）",
+    "type": "int",
+    "default": 604800,
+    "hint": "默认最多 7 天；与一次忽略持续时间分开配置。"
+  },
+  "ignore_trigger_default_count": {
+    "description": "忽略策略默认触发次数",
+    "type": "int",
+    "default": 1,
+    "hint": "1 表示首个可激活事件即可触发忽略；更高值可用于刷屏阈值。"
+  },
+  "ignore_trigger_max_count": {
+    "description": "忽略策略允许的最大触发次数",
+    "type": "int",
+    "default": 10000,
+    "hint": "部署者可调；运行计数仅保存在内存，不会为每条消息写存储。"
+  },
+  "ignore_trigger_default_window_seconds": {
+    "description": "忽略策略默认计数窗口（秒）",
+    "type": "float",
+    "default": 0.0,
+    "hint": "0 表示在策略当前运行生命周期内累计；大于 0 表示滑动时间窗口。"
+  },
+  "ignore_trigger_max_window_seconds": {
+    "description": "忽略策略最长计数窗口（秒）",
+    "type": "float",
+    "default": 86400.0,
+    "hint": "对象、时间窗口、计数是可组合句柄，不是互斥模式。"
+  },
+  "max_ignore_policies_per_scope": {
+    "description": "每个 UMO 最多同时存在的对象忽略策略数",
+    "type": "int",
+    "default": 50,
+    "hint": "对象 ID 使用精确索引，未配置对象不进入该对象的运行计数。"
+  },
+  "max_ignore_policies_total": {
+    "description": "整个插件最多同时保存的对象忽略策略数",
+    "type": "int",
+    "default": 1000,
+    "hint": "限制持久状态规模；不对未配置对象做全局扫描。"
+  },
+  "echo_enabled": {
+    "description": "允许主 Agent 显式挂载有限回响",
+    "type": "bool",
+    "default": false,
+    "hint": "回响是可选的有限主动自激活权限；没有显式调用回响工具就不会创建。回响触发的回合结构上禁止再创建回响。"
+  },
+  "echo_default_delay_seconds": {
+    "description": "回响默认首次延迟（秒）",
+    "type": "float",
+    "default": 30.0,
+    "hint": "使用 AstrBot 原生一次性 active-agent 调度，支持秒级 DateTrigger。"
+  },
+  "echo_max_delay_seconds": {
+    "description": "回响首次延迟可配置上限（秒）",
+    "type": "float",
+    "default": 1800.0,
+    "hint": "部署者可根据成本和模型能力调整。"
+  },
+  "echo_default_count": {
+    "description": "一次回响调用默认创建的有限检查次数",
+    "type": "int",
+    "default": 1,
+    "hint": "暂定为 1，但不是代码写死；受 echo_max_count 控制。"
+  },
+  "echo_max_count": {
+    "description": "一次回响调用允许的最大检查次数",
+    "type": "int",
+    "default": 1,
+    "hint": "大于 1 时所有检查在原始激活回合一次性预排，不允许由回响递归创建。"
+  },
+  "echo_default_interval_seconds": {
+    "description": "多次回响之间的默认间隔（秒）",
+    "type": "float",
+    "default": 30.0,
+    "hint": "仅 count > 1 时有实际意义。"
+  },
+  "echo_max_interval_seconds": {
+    "description": "多次回响之间的最大间隔（秒）",
+    "type": "float",
+    "default": 1800.0,
+    "hint": "部署者可调整。"
+  },
+  "echo_max_pending_per_scope": {
+    "description": "每个 UMO 最多待执行回响数",
+    "type": "int",
+    "default": 10,
+    "hint": "防止有限主动权限意外膨胀。"
+  },
+  "echo_max_pending_total": {
+    "description": "整个插件最多待执行回响数",
+    "type": "int",
+    "default": 100,
+    "hint": "所有回响均为非持久、一次性原生任务。"
+  },
+  "echo_cancel_on_native_wake": {
+    "description": "真实原生唤醒到达时取消当前作用域待执行回响",
+    "type": "bool",
+    "default": true,
+    "hint": "用户已经再次 @/引用/唤醒时通常不再需要延迟回响。被忽略策略真正抑制的恶意唤醒不会作为有效互动取消回响。"
+  },
+  "echo_cancel_on_sender_activation": {
+    "description": "被追踪对象真实额外激活成功时取消待执行回响",
+    "type": "bool",
+    "default": true,
+    "hint": "避免已有新相关激活后旧回响仍重复唤醒。"
+  },
+  "echo_allow_native_wake_source": {
+    "description": "允许原生 @/引用/唤醒回合创建回响",
+    "type": "bool",
+    "default": true,
+    "hint": "只控制创建权限，不会自动创建。"
+  },
+  "echo_allow_sender_activation_source": {
+    "description": "允许对象追踪额外激活回合创建回响",
+    "type": "bool",
+    "default": true,
+    "hint": "只控制创建权限，不会自动创建。"
+  },
+  "echo_allow_heartbeat_source": {
+    "description": "允许心跳回合创建回响",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭以避免周期激活进一步放大主动检查；部署者可显式开启。"
+  },
   "operator_access_default_seconds": {
     "description": "插件操作员授权默认有效期（秒）",
     "type": "int",
@@ -105,14 +263,8 @@
     "description": "宿主配置检测提醒方式",
     "type": "string",
     "default": "page_and_agent",
-    "options": [
-      "page_only",
-      "page_and_agent"
-    ],
-    "labels": [
-      "仅插件页面",
-      "插件页面 + 主 Agent 语境提醒"
-    ],
+    "options": ["page_only", "page_and_agent"],
+    "labels": ["仅插件页面", "插件页面 + 主 Agent 语境提醒"],
     "hint": "检测器只读 AstrBot 当前生效配置，不会自动修改设置。page_and_agent 只向主 Agent提供不持久化的配置事实，由主 Agent结合完整语境决定是否提醒用户；插件不会直接发言。"
   }
 }
