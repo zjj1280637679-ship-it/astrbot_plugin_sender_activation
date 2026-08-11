@@ -1,0 +1,57 @@
+name: integration check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - main.py
+      - settings.py
+      - attention_domain.py
+      - attention_service.py
+      - echo_service.py
+      - heartbeat_domain.py
+      - heartbeat_gate.py
+      - heartbeat_service.py
+      - cron_adapter.py
+      - tests/test_heartbeat_truth.py
+      - tests/test_astrbot_runtime.py
+      - .github/workflows/integration-check.yml
+
+permissions:
+  contents: read
+
+env:
+  ASTRBOT_BASELINE_TAG: v4.27.2
+  ASTRBOT_BASELINE_SHA: ad4fbfa90ca0c4ac2b30b3250e34dbf8fe7babbf
+
+jobs:
+  astrbot-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned AstrBot runtime
+        run: |
+          git clone --depth 1 --branch "$ASTRBOT_BASELINE_TAG" https://github.com/AstrBotDevs/AstrBot.git /tmp/AstrBot
+          test "$(git -C /tmp/AstrBot rev-parse HEAD)" = "$ASTRBOT_BASELINE_SHA"
+          python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('/tmp/AstrBot/pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+          print('AstrBot source version:', version)
+          assert version == '4.27.2', version
+          PY
+          python -m pip install --user -e /tmp/AstrBot
+
+      - name: Run host integration invariants
+        run: |
+          python tests/test_heartbeat_truth.py
+          python tests/test_astrbot_runtime.py
+
+      - name: Candidate consistency
+        run: |
+          python -m py_compile main.py settings.py attention_domain.py attention_service.py echo_service.py
+          python -m json.tool _conf_schema.json >/dev/null
+          git diff --check

@@ -1,0 +1,60 @@
+name: release audit
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [ready_for_review, synchronize, reopened]
+
+permissions:
+  contents: read
+
+env:
+  ASTRBOT_BASELINE_TAG: v4.27.2
+  ASTRBOT_BASELINE_SHA: ad4fbfa90ca0c4ac2b30b3250e34dbf8fe7babbf
+
+jobs:
+  release-audit:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned AstrBot runtime
+        run: |
+          git clone --depth 1 --branch "$ASTRBOT_BASELINE_TAG" https://github.com/AstrBotDevs/AstrBot.git /tmp/AstrBot
+          test "$(git -C /tmp/AstrBot rev-parse HEAD)" = "$ASTRBOT_BASELINE_SHA"
+          python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('/tmp/AstrBot/pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+          print('AstrBot source version:', version)
+          assert version == '4.27.2', version
+          PY
+          python -m pip install --user -e /tmp/AstrBot
+
+      - name: Static source audit
+        run: |
+          python -m py_compile \
+            main.py settings.py domain.py service.py storage.py \
+            attention_domain.py attention_service.py echo_service.py \
+            heartbeat_domain.py heartbeat_gate.py heartbeat_service.py cron_adapter.py \
+            activation_reservation.py access_domain.py access_service.py session_gate.py
+          python -m json.tool _conf_schema.json >/dev/null
+          grep -q 'VERSION = "1.1.0-rc.19"' main.py
+          grep -q 'version: "1.1.0-rc.19"' metadata.yaml
+          grep -q 'astrbot_version: ">=4.26.1"' metadata.yaml
+          git diff --check
+
+      - name: Run invariant regression suite
+        run: |
+          python tests/test_attention_runtime_core.py
+          python tests/test_heartbeat_gate.py
+          python tests/test_heartbeat_truth.py
+          python tests/test_concurrency_boundary.py
+          python tests/test_astrbot_runtime.py
+
+      - name: Candidate summary
+        run: |
+          echo "head=$GITHUB_SHA"
+          git status --short
