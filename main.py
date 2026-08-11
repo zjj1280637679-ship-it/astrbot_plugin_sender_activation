@@ -247,7 +247,12 @@ def _tool_error_policy(code: str) -> tuple[str, str, bool]:
 
 def _tool_error(error: DomainError, tool: str) -> str:
     failure_class, recovery_action, same_call_retryable = _tool_error_policy(error.code)
-    indeterminate = error.code == "commit_indeterminate"
+    indeterminate = error.code in {
+        "commit_indeterminate",
+        "access_commit_indeterminate",
+        "attention_commit_indeterminate",
+        "native_cron_update_indeterminate",
+    }
     return _json(
         {
             "status": "error",
@@ -620,22 +625,40 @@ class SenderActivationPlugin(Star):
         }
 
     @staticmethod
-    def _scope(event: AstrMessageEvent) -> str:
-        if event.get_platform_name() != "aiocqhttp":
-            raise DomainError(
-                "unsupported_platform",
-                "本插件首版只支持 aiocqhttp。",
-            )
-        if event.is_private_chat():
-            raise DomainError(
-                "unsupported_chat_type",
-                "本插件首版只作用于群聊。",
-            )
-        return normalize_scope(event.unified_msg_origin)
+    def _owned_cron_payload(event: AstrMessageEvent) -> dict[str, Any] | None:
+        if event.get_platform_name() != "cron":
+            return None
+        payload = event.get_extra("cron_payload")
+        if not isinstance(payload, dict):
+            return None
+        if is_owned_echo_payload(payload) or is_owned_heartbeat_payload(payload):
+            return payload
+        return None
 
-    @staticmethod
-    def _sender(event: AstrMessageEvent) -> str:
-        sender = str(event.get_sender_id() or "").strip()
+    @classmethod
+    def _scope(cls, event: AstrMessageEvent) -> str:
+        if event.get_platform_name() == "aiocqhttp":
+            if event.is_private_chat():
+                raise DomainError(
+                    "unsupported_chat_type",
+                    "本插件首版只作用于群聊。",
+                )
+            return normalize_scope(event.unified_msg_origin)
+        payload = cls._owned_cron_payload(event)
+        if payload is not None:
+            return normalize_scope(payload.get("session"))
+        raise DomainError(
+            "unsupported_platform",
+            "本插件首版只支持 aiocqhttp 群事件及本插件自己创建的主动 Cron 回合。",
+        )
+
+    @classmethod
+    def _sender(cls, event: AstrMessageEvent) -> str:
+        payload = cls._owned_cron_payload(event)
+        if payload is not None:
+            sender = str(payload.get("sender_id") or "").strip()
+        else:
+            sender = str(event.get_sender_id() or "").strip()
         if not sender:
             raise DomainError("missing_sender", "当前事件缺少发送者 QQ ID。")
         return sender
