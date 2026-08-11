@@ -12,11 +12,23 @@ jobs:
   heartbeat-truth:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
+      - name: Install AstrBot 4.27.2 runtime
+        run: |
+          git clone --depth 1 --branch master https://github.com/AstrBotDevs/AstrBot.git /tmp/AstrBot
+          python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('/tmp/AstrBot/pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+          print('AstrBot source version:', version)
+          assert version == '4.27.2', version
+          PY
+          python -m pip install --user -e /tmp/AstrBot
       - name: Apply truth fix and run counterexamples
         run: |
           python .github/rc19_heartbeat_truth_fix.py
