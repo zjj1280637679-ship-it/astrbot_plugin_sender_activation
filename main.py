@@ -156,6 +156,26 @@ _TOOL_ERROR_POLICIES: dict[str, tuple[str, str, bool]] = {
         "inspect_heartbeat_health",
         False,
     ),
+    "heartbeat_preflight_unavailable": (
+        "host_capability",
+        "inspect_native_cron",
+        False,
+    ),
+    "heartbeat_preflight_inactive": (
+        "host_capability",
+        "inspect_native_cron",
+        False,
+    ),
+    "heartbeat_preflight_create_failed": (
+        "host_runtime",
+        "inspect_native_cron",
+        True,
+    ),
+    "heartbeat_preflight_update_indeterminate": (
+        "host_runtime",
+        "query_heartbeat_then_retry",
+        False,
+    ),
     "yield_not_available": (
         "state_precondition",
         "reply_normally_or_wait_for_plugin_proactive_turn",
@@ -254,6 +274,7 @@ def _tool_error(error: DomainError, tool: str) -> str:
         "access_commit_indeterminate",
         "attention_commit_indeterminate",
         "native_cron_update_indeterminate",
+        "heartbeat_preflight_update_indeterminate",
     }
     return _json(
         {

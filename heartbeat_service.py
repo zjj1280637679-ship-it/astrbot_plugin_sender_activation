@@ -269,7 +269,14 @@ class HeartbeatService:
                     expires_at=self._native_minute_expiry(now, duration),
                 )
                 if self._wake_gate is not None:
-                    updated = await self._wake_gate.arm(updated)
+                    try:
+                        updated = await self._wake_gate.arm(updated)
+                    except Exception as exc:
+                        self.last_error_code = "heartbeat_preflight_update_indeterminate"
+                        raise DomainError(
+                            "heartbeat_preflight_update_indeterminate",
+                            "心跳模板已更新但前置门重建失败；模板保持禁用，当前不会主动唤醒，需查询后重试。",
+                        ) from exc
                 renewed.append(updated)
             return self._success(
                 outcome="heartbeat_renewed",

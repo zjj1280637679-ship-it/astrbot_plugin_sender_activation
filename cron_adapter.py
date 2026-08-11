@@ -361,7 +361,7 @@ class AstrBotCronAdapter:
         for cleanup in await self.raw_cleanup_jobs():
             await self._delete_quietly(getattr(cleanup, "job_id", ""))
         for job in await self.raw_owned_jobs():
-            if not bool(getattr(job, "enabled", False)):
+            if self._active_execution_enabled and not bool(getattr(job, "enabled", False)):
                 continue
             job_id = str(getattr(job, "job_id", "") or "")
             payload = dict(getattr(job, "payload", {}) or {})
