@@ -1,0 +1,42 @@
+name: rc19 AstrBot runtime integration
+
+on:
+  push:
+    branches:
+      - agent/rc19-attention-runtime
+
+permissions:
+  contents: read
+
+jobs:
+  astrbot-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install AstrBot runtime
+        run: |
+          git clone --depth 1 --branch master https://github.com/AstrBotDevs/AstrBot.git /tmp/AstrBot
+          python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('/tmp/AstrBot/pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+          print('AstrBot source version:', version)
+          assert version == '4.27.2', version
+          PY
+          python -m pip install --user -e /tmp/AstrBot
+
+      - name: Run host-level counterexample integration
+        run: |
+          cd ..
+          python astrbot_plugin_sender_activation/.github/rc19_runtime_integration.py
+
+      - name: Static candidate audit
+        run: |
+          python -m py_compile main.py settings.py attention_domain.py attention_service.py echo_service.py
+          python -m json.tool _conf_schema.json >/dev/null
+          grep -q 'VERSION = "1.1.0-rc.19"' main.py
+          grep -q 'version: "1.1.0-rc.19"' metadata.yaml
+          grep -q 'astrbot_version: ">=4.26.1"' metadata.yaml
+          git diff --check
