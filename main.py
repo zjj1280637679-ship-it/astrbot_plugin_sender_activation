@@ -177,6 +177,7 @@ _TOOL_ERROR_POLICIES: dict[str, tuple[str, str, bool]] = {
     "echo_scope_capacity_exceeded": ("capacity", "cancel_pending_echoes_or_raise_limit", False),
     "echo_total_capacity_exceeded": ("capacity", "cancel_pending_echoes_or_raise_limit", False),
     "echo_create_failed": ("host_runtime", "inspect_native_cron", True),
+    "echo_delete_failed": ("host_runtime", "retry_cancel_or_inspect_native_cron", True),
 }
 
 
