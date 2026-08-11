@@ -23,10 +23,22 @@ from .access_service import (
     AccessService,
 )
 from .activation_reservation import ActivationReservationCoordinator
+from .attention_service import (
+    ATTENTION_BACKUP_KEY,
+    ATTENTION_STATE_KEY,
+    IGNORE_EFFECT_CONTRACT,
+    AttentionIgnoreService,
+)
 from .cron_adapter import AstrBotCronAdapter
 from .domain import DomainError, normalize_scope
 from .heartbeat_domain import HEARTBEAT_TAG, is_owned_heartbeat_payload
 from .heartbeat_service import HeartbeatService
+from .echo_service import (
+    ECHO_EFFECT_CONTRACT,
+    ECHO_TAG,
+    EchoService,
+    is_owned_echo_payload,
+)
 from .host_diagnostics import (
     build_agent_config_notice,
     evaluate_host_config,
@@ -44,10 +56,11 @@ from .settings import PluginSettings
 from .storage import AstrBotKVStateStore
 
 PLUGIN_NAME = "astrbot_plugin_sender_activation"
-VERSION = "1.1.0-rc.18"
+VERSION = "1.1.0-rc.19"
 DECISION_EXTRA = "sender_activation_decision"
 RECOVERY_REPORT_EXTRA = "sender_activation_recovery_report"
 TURN_YIELD_EXTRA = "sender_activation_turn_yield"
+ATTENTION_IGNORED_EXTRA = "sender_attention_ignored"
 API_PREFIX = f"/{PLUGIN_NAME}"
 
 _ACTIVE_PLUGIN: SenderActivationPlugin | None = None
@@ -58,6 +71,8 @@ _TOOL_EFFECT_CONTRACTS = {
     "manage_sender_activation_rate": RATE_EFFECT_CONTRACT,
     "manage_heartbeat_lease": HEARTBEAT_EFFECT_CONTRACT,
     "yield_current_turn": "contextual_no_visible_reply_for_plugin_proactive_turn",
+    "manage_attention_ignore": IGNORE_EFFECT_CONTRACT,
+    "manage_echo_hook": ECHO_EFFECT_CONTRACT,
 }
 _TOOL_ERROR_POLICIES: dict[str, tuple[str, str, bool]] = {
     "session_plugin_inactive": ("session", "enable_plugin_for_session", False),
@@ -145,6 +160,23 @@ _TOOL_ERROR_POLICIES: dict[str, tuple[str, str, bool]] = {
         "reply_normally_or_wait_for_plugin_proactive_turn",
         False,
     ),
+    "attention_ignore_disabled": (
+        "configuration",
+        "enable_agent_ignore_in_plugin_config",
+        False,
+    ),
+    "attention_storage_unavailable": ("storage", "inspect_attention_storage", False),
+    "attention_storage_write_failed": ("storage", "retry_after_storage_recovery", True),
+    "attention_commit_indeterminate": ("storage", "reload_and_inspect_attention_state", False),
+    "echo_disabled": ("configuration", "enable_echo_in_plugin_config", False),
+    "echo_source_not_allowed": ("authorization", "adjust_echo_source_permissions", False),
+    "echo_source_unavailable": ("state_precondition", "use_from_a_real_activation_turn", False),
+    "echo_recursion_forbidden": ("structural", "do_not_create_echo_from_echo", False),
+    "echo_service_inactive": ("host_capability", "inspect_echo_health", False),
+    "echo_native_scheduler_unavailable": ("host_capability", "enable_native_cron", False),
+    "echo_scope_capacity_exceeded": ("capacity", "cancel_pending_echoes_or_raise_limit", False),
+    "echo_total_capacity_exceeded": ("capacity", "cancel_pending_echoes_or_raise_limit", False),
+    "echo_create_failed": ("host_runtime", "inspect_native_cron", True),
 }
 
 
@@ -236,6 +268,39 @@ def _tool_error(error: DomainError, tool: str) -> str:
     )
 
 
+class AttentionGuardFilter(CustomFilter):
+    """Exact-object pre-LLM guard. No policy for this ID means immediate inert return."""
+
+    def filter(self, event: AstrMessageEvent, cfg: Any) -> bool:
+        try:
+            plugin = _ACTIVE_PLUGIN
+            if plugin is None or not plugin.settings.agent_ignore_enabled:
+                return False
+            if event.get_platform_name() != "aiocqhttp" or event.is_private_chat():
+                return False
+            sender_id = str(event.get_sender_id() or "").strip()
+            self_id = str(event.get_self_id() or "").strip()
+            if not sender_id or (self_id and sender_id == self_id):
+                return False
+            scope = event.unified_msg_origin
+            if not plugin.attention_service.has_policy(scope, sender_id):
+                return False
+            session_status = plugin.session_gate.read_sync(scope)
+            if session_status.enabled is False:
+                return False
+
+            # Count only events that could otherwise reach the main Agent. Ordinary
+            # messages from an untracked object must not accumulate merely because an
+            # ignore policy exists.
+            if event.is_at_or_wake_command:
+                return True
+            if not plugin.service.storage_ready:
+                return False
+            return bool(plugin.service.preview(scope, sender_id).admitted)
+        except Exception:
+            return False
+
+
 class SenderActivationFilter(CustomFilter):
 
 
@@ -307,6 +372,18 @@ class SenderActivationPlugin(Star):
             self.settings,
             AstrBotKVStateStore(self),
         )
+        self.attention_service = AttentionIgnoreService(
+            self.settings.ignore_limits,
+            AstrBotKVStateStore(
+                self,
+                state_key=ATTENTION_STATE_KEY,
+                backup_key=ATTENTION_BACKUP_KEY,
+            ),
+        )
+        self.echo_service = EchoService(
+            self.settings.echo_limits,
+            getattr(context, "cron_manager", None),
+        )
         self.access_service = AccessService(
             self.settings,
             AstrBotKVStateStore(
@@ -333,6 +410,14 @@ class SenderActivationPlugin(Star):
         self._terminated = False
         await self.access_service.initialize()
         await self.service.initialize()
+        await self.attention_service.initialize()
+        try:
+            await self.echo_service.initialize()
+        except DomainError as exc:
+            logger.warning(
+                "[sender_activation] echo_inert error=%s",
+                exc.code,
+            )
         try:
             await self.heartbeat_service.initialize()
         except DomainError as exc:
@@ -358,12 +443,19 @@ class SenderActivationPlugin(Star):
 
         self._terminated = True
         self.activation_reservations.close()
+        echo_failures = await self.echo_service.terminate()
+        if echo_failures:
+            logger.warning(
+                "[sender_activation] echo_shutdown_failures count=%d",
+                len(echo_failures),
+            )
         heartbeat_failures = await self.heartbeat_service.terminate()
         if heartbeat_failures:
             logger.warning(
                 "[sender_activation] heartbeat_shutdown_failures count=%d",
                 len(heartbeat_failures),
             )
+        await self.attention_service.terminate()
         await self.service.terminate()
         await self.access_service.terminate()
         if _ACTIVE_PLUGIN is self:
@@ -401,17 +493,27 @@ class SenderActivationPlugin(Star):
             "管理当前作用域的插件操作员授权",
         )
 
+    async def _safe_echo_snapshot(self, scope: str | None = None) -> dict[str, Any]:
+        try:
+            return await self.echo_service.snapshot(scope=scope)
+        except Exception:
+            return {"echo_hooks": [], "quarantined": [], "raw_scopes": []}
+
     async def _page_scope_map(self) -> dict[str, str]:
         state = self.service.snapshot()
         heartbeat = await self.heartbeat_service.snapshot(
             scope_ref=self.service.scope_ref,
         )
         access = self.access_service.snapshot()
+        attention = self.attention_service.snapshot()
+        echo = await self._safe_echo_snapshot()
         scope_map: dict[str, str] = {}
         for scope in [
             *state["known_scopes"],
             *heartbeat["raw_scopes"],
             *access["known_scopes"],
+            *attention["known_scopes"],
+            *echo["raw_scopes"],
         ]:
             reference = self.service.scope_ref(scope)
             if reference in scope_map and scope_map[reference] != scope:
@@ -483,6 +585,8 @@ class SenderActivationPlugin(Star):
             scope=scope,
             scope_ref=self.service.scope_ref,
         )
+        attention = self.attention_service.snapshot(scope=scope)
+        echo = await self._safe_echo_snapshot(scope=scope)
         if scope is None:
             source = {
                 **source,
@@ -492,6 +596,8 @@ class SenderActivationPlugin(Star):
             }
             access["operator_grants"] = []
             heartbeat["heartbeat_leases"] = []
+            attention["ignore_policies"] = []
+            echo["echo_hooks"] = []
 
         def project(row: dict[str, Any]) -> dict[str, Any]:
             result = dict(row)
@@ -505,8 +611,11 @@ class SenderActivationPlugin(Star):
             "rate_leases": [project(row) for row in source["rate_leases"]],
             "recovery_reports": [project(row) for row in source["recovery_reports"]],
             "operator_grants": [project(row) for row in access["operator_grants"]],
+            "ignore_policies": [project(row) for row in attention["ignore_policies"]],
             "heartbeat_leases": heartbeat["heartbeat_leases"],
             "heartbeat_quarantined": heartbeat["quarantined"],
+            "echo_hooks": echo["echo_hooks"],
+            "echo_quarantined": echo["quarantined"],
             "known_scopes": sorted(await self._page_scope_map()),
         }
 
@@ -559,6 +668,8 @@ class SenderActivationPlugin(Star):
             "manage_sender_activation",
             "manage_sender_activation_rate",
             "manage_heartbeat_lease",
+            "manage_attention_ignore",
+            "manage_echo_hook",
         )
         informational_tools = (
             "manage_sender_activation_access",
@@ -608,6 +719,33 @@ class SenderActivationPlugin(Star):
             "blocked_operation_tools": blocked,
         }
 
+    def _activation_source(self, event: AstrMessageEvent) -> str | None:
+        payload = event.get_extra("cron_payload")
+        if isinstance(payload, dict) and is_owned_echo_payload(payload):
+            return "echo"
+        if event.get_extra(DECISION_EXTRA):
+            return "sender_activation"
+        if (
+            isinstance(payload, dict)
+            and HEARTBEAT_TAG in payload
+            and is_owned_heartbeat_payload(payload)
+        ):
+            return "heartbeat"
+        if event.is_at_or_wake_command:
+            return "native_wake"
+        if event.get_extra(RECOVERY_REPORT_EXTRA):
+            return "recovery_report"
+        return None
+
+    def _echo_source_allowed(self, source: str) -> bool:
+        if source == "native_wake":
+            return self.settings.echo_allow_native_wake_source
+        if source == "sender_activation":
+            return self.settings.echo_allow_sender_activation_source
+        if source == "heartbeat":
+            return self.settings.echo_allow_heartbeat_source
+        return False
+
     def _operator_context_notice(
         self,
         event: AstrMessageEvent,
@@ -632,6 +770,39 @@ class SenderActivationPlugin(Star):
             )
         return text
 
+    @filter.custom_filter(AttentionGuardFilter, priority=3000)
+    async def apply_attention_guard(self, event: AstrMessageEvent) -> None:
+        try:
+            scope = self._scope(event)
+            sender = self._sender(event)
+            decision = self.attention_service.evaluate_activation_attempt(scope, sender)
+            if not decision.ignored:
+                return
+            native_wake = bool(event.is_at_or_wake_command)
+            mode = self.settings.ignore_native_wake_mode if native_wake else "extra_only"
+            payload = {**decision.as_dict(), "native_wake": native_wake, "mode": mode}
+            event.set_extra(ATTENTION_IGNORED_EXTRA, payload)
+
+            if not native_wake:
+                # The later sender-activation handler sees the extra marker and stays inert.
+                return
+            if mode == "extra_only":
+                # Native wake remains real engagement in this conservative mode.
+                if self.settings.echo_enabled and self.settings.echo_cancel_on_native_wake:
+                    await self.echo_service.cancel_scope(scope)
+                return
+            if mode == "suppress_llm":
+                # Keep other plugin handlers available but prevent AstrBot's default Agent path.
+                event.is_at_or_wake_command = False
+                return
+            if mode == "stop_event":
+                event.stop_event()
+                return
+        except DomainError as exc:
+            logger.debug("[sender_activation] attention_guard_inert code=%s", exc.code)
+        except Exception:
+            logger.exception("[sender_activation] attention_guard_failed")
+
     @filter.custom_filter(SenderActivationFilter, priority=2000)
     async def activate_native_agent(self, event: AstrMessageEvent) -> None:
 
@@ -639,7 +810,11 @@ class SenderActivationPlugin(Star):
         try:
             scope = self._scope(event)
             sender = self._sender(event)
+            if event.get_extra(ATTENTION_IGNORED_EXTRA):
+                return
             if event.is_at_or_wake_command:
+                if self.settings.echo_enabled and self.settings.echo_cancel_on_native_wake:
+                    await self.echo_service.cancel_scope(scope)
                 return
             reservation = await self.activation_reservations.reserve(scope, sender)
             if not reservation.released or reservation.permit is None:
@@ -669,6 +844,8 @@ class SenderActivationPlugin(Star):
                 return
             if not decision.admitted:
                 return
+            if self.settings.echo_enabled and self.settings.echo_cancel_on_sender_activation:
+                await self.echo_service.cancel_scope(scope)
             event.set_extra(DECISION_EXTRA, decision.as_dict())
             event.set_extra("enable_streaming", False)
             event.is_wake = True
@@ -800,9 +977,11 @@ class SenderActivationPlugin(Star):
         event.clear_result()
 
     def _plugin_proactive_source(self, event: AstrMessageEvent) -> str | None:
+        payload = event.get_extra("cron_payload")
+        if isinstance(payload, dict) and is_owned_echo_payload(payload):
+            return "echo"
         if event.get_extra(DECISION_EXTRA):
             return "sender_activation"
-        payload = event.get_extra("cron_payload")
         if (
             isinstance(payload, dict)
             and HEARTBEAT_TAG in payload
@@ -812,6 +991,143 @@ class SenderActivationPlugin(Star):
         if event.get_extra(RECOVERY_REPORT_EXTRA):
             return "recovery_report"
         return None
+
+    @filter.llm_tool(name="manage_attention_ignore")
+    async def manage_attention_ignore(
+        self,
+        event: AstrMessageEvent,
+        action: str = "",
+        target_ids: list[str] | None = None,
+        trigger_count: int = 0,
+        trigger_window_seconds: float = 0,
+        ignore_duration_seconds: int = 0,
+        policy_seconds: int = 0,
+    ) -> str:
+        """管理主 Agent 自主使用的有限期对象忽略策略。用于减少已识别对象未来可激活事件的 LLM 成本；set 可组合对象、计数与时间窗口，clear 撤销，list 查询。沉默并不禁止先调用此控制工具；需要无可见回复时可在后续最终工具选择再单独调用 yield_current_turn。详细边界见 group-duty-orchestration Skill。
+
+        Args:
+            action(string): set、clear 或 list。
+            target_ids(list[string]): 当前群真实数字 QQ ID 数组；list 可空。
+            trigger_count(number): set 时累计多少个“原本可激活 AI”的事件后触发忽略；0 使用配置默认值。
+            trigger_window_seconds(number): set 时计数滑动窗口秒数；0 表示当前策略运行生命周期累计。
+            ignore_duration_seconds(number): 阈值命中后实际忽略多久；0 使用配置默认值。
+            policy_seconds(number): 该对象计数/忽略策略本身最多存在多久；0 使用配置默认值。
+        """
+        tool = "manage_attention_ignore"
+        try:
+            action_name = str(action or "").strip().lower()
+            if action_name == "set" and not self.settings.agent_ignore_enabled:
+                raise DomainError(
+                    "attention_ignore_disabled",
+                    "插件配置未授予主 Agent 新建对象忽略策略的权限。",
+                )
+            scope = self._scope(event)
+            if action_name == "set":
+                await self._require_new_state_allowed(scope)
+            actor = self._actor(event)
+            result = await self.attention_service.manage(
+                scope=scope,
+                action=action_name,
+                target_ids=target_ids,
+                trigger_count=trigger_count,
+                trigger_window_seconds=trigger_window_seconds,
+                ignore_duration_seconds=ignore_duration_seconds,
+                policy_seconds=policy_seconds,
+                created_by=actor.actor_ref,
+            )
+            result["tool"] = tool
+            result["authority"] = "agent_configured_ignore_permission"
+            return _json(result)
+        except DomainError as exc:
+            return _tool_error(exc, tool)
+        except Exception as exc:
+            logger.exception("[sender_activation] attention_ignore_tool_failed")
+            return _tool_error(
+                DomainError("internal_error", f"工具执行失败: {type(exc).__name__}"),
+                tool,
+            )
+
+    @filter.llm_tool(name="manage_echo_hook")
+    async def manage_echo_hook(
+        self,
+        event: AstrMessageEvent,
+        action: str = "",
+        hook_ids: list[str] | None = None,
+        group_ids: list[str] | None = None,
+        delay_seconds: float = 0,
+        count: int = 0,
+        interval_seconds: float = 0,
+        instruction: str = "",
+    ) -> str:
+        """管理可选的有限回响钩子。create 仅在配置允许的真实激活回合中，为当前会话预排有限次数的一次性主动再检查；没有显式调用就没有回响。回响来源的回合结构上禁止再 create。cancel/list 可清理或查询。
+
+        Args:
+            action(string): create、cancel 或 list。
+            hook_ids(list[string]): cancel 时可指定一次性回响任务 ID。
+            group_ids(list[string]): cancel 时可指定同一次创建形成的回响组 ID。
+            delay_seconds(number): 首次回响延迟秒数；0 使用配置默认值。
+            count(number): 本次一次性预排的回响次数；0 使用配置默认值。
+            interval_seconds(number): count>1 时各回响之间的秒数；0 使用配置默认值。
+            instruction(string): 回响时重新检查原会话的语境目标。
+        """
+        tool = "manage_echo_hook"
+        try:
+            action_name = str(action or "").strip().lower()
+            scope = self._scope(event)
+            if action_name == "list":
+                result = await self.echo_service.list_scope(scope)
+            elif action_name == "cancel":
+                result = await self.echo_service.cancel(
+                    scope=scope,
+                    hook_ids=hook_ids,
+                    group_ids=group_ids,
+                )
+            elif action_name == "create":
+                if not self.settings.echo_enabled:
+                    raise DomainError(
+                        "echo_disabled",
+                        "插件配置未授予主 Agent 创建回响的权限。",
+                    )
+                await self._require_new_state_allowed(scope)
+                source = self._activation_source(event)
+                if source is None:
+                    raise DomainError(
+                        "echo_source_unavailable",
+                        "当前回合没有可验证的真实激活来源，不能创建回响。",
+                    )
+                if source == "echo":
+                    raise DomainError(
+                        "echo_recursion_forbidden",
+                        "回响触发的回合不能创建新的回响。",
+                    )
+                if not self._echo_source_allowed(source):
+                    raise DomainError(
+                        "echo_source_not_allowed",
+                        f"插件配置未允许 {source} 来源创建回响。",
+                    )
+                actor = self._actor(event)
+                result = await self.echo_service.create(
+                    scope=scope,
+                    sender_id=actor.sender_id,
+                    actor_ref=actor.actor_ref,
+                    source=source,
+                    delay_seconds=delay_seconds,
+                    count=count,
+                    interval_seconds=interval_seconds,
+                    instruction=instruction,
+                )
+            else:
+                raise DomainError("invalid_action", "action 必须是 create、cancel 或 list。")
+            result["tool"] = tool
+            return _json(result)
+        except DomainError as exc:
+            return _tool_error(exc, tool)
+        except Exception as exc:
+            logger.exception("[sender_activation] echo_tool_failed")
+            return _tool_error(
+                DomainError("internal_error", f"工具执行失败: {type(exc).__name__}"),
+                tool,
+            )
 
     @filter.llm_tool(name="manage_sender_activation_access")
     async def manage_sender_activation_access(
@@ -1012,7 +1328,7 @@ class SenderActivationPlugin(Star):
         event: AstrMessageEvent,
         reason: str = "",
     ) -> str | None:
-        """仅在本插件对象激活或心跳额外唤醒的当前 Agent 回合中，结构化结束本轮且不发送可见回复。当前没有独立公开价值时使用；普通 @、原生会话或其他插件唤醒不可用。成功调用必须作为当前工具选择中的唯一且最后一个调用。详细规则见 sender-activation 或 group-duty-orchestration Skill。
+        """仅在本插件对象激活、心跳或回响额外唤醒的当前 Agent 回合中，结构化结束本轮且不发送可见回复。沉默只约束公开输出，不等于禁止控制面工具：可先在前一个工具选择中设置有限忽略/清理状态，再在后续最终工具选择中把本工具作为唯一调用结束本轮。普通 @、原生会话或其他插件唤醒不可用。详细规则见 group-duty-orchestration Skill。
 
         Args:
             reason(string): 可选的简短语境理由，不面向群聊显示。
@@ -1074,7 +1390,9 @@ class SenderActivationPlugin(Star):
             health = {
                 **self.service.health(),
                 **self.access_service.health(),
+                **self.attention_service.health(),
                 **await self.heartbeat_service.health(),
+                **await self.echo_service.health(),
                 **self.activation_reservations.health(),
                 "turn_yield_count": self._yield_count,
             }
