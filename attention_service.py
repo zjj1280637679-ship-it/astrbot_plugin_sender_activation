@@ -212,6 +212,7 @@ class AttentionIgnoreService:
         self._store = store
         self._wall_clock = wall_clock
         self._state = IgnoreState.empty()
+        self._policy_map: dict[IgnoreKey, IgnorePolicy] = {}
         self._mutation_lock = asyncio.Lock()
         self._guard = ObjectAttentionGuard(monotonic_clock=monotonic_clock)
         self._metrics_lock = threading.Lock()
@@ -235,11 +236,15 @@ class AttentionIgnoreService:
         with self._metrics_lock:
             self._metrics[name] += 1
 
+    def _rebuild_policy_index(self) -> None:
+        self._policy_map = {policy.key: policy for policy in self._state.policies}
+
     async def initialize(self) -> None:
         self._lifecycle_active = False
         self.storage_ready = False
         self.storage_write_healthy = False
         self._guard.clear_all()
+        self._policy_map.clear()
         try:
             stored = await self._store.load()
         except Exception as exc:
@@ -292,6 +297,7 @@ class AttentionIgnoreService:
             return
 
         self._state = selected.state
+        self._rebuild_policy_index()
         self.loaded_from = selected_name
         self.quarantined = selected.quarantined
         self.expired_on_load = selected.expired_count
@@ -308,6 +314,7 @@ class AttentionIgnoreService:
             self.storage_ready = False
             self.storage_write_healthy = False
             self._guard.clear_all()
+            self._policy_map.clear()
 
     def _require_storage(self) -> None:
         if not self._lifecycle_active or not self.storage_ready:
@@ -344,6 +351,7 @@ class AttentionIgnoreService:
                     "忽略策略写入失败；运行策略未改变。",
                 ) from exc
             self._state = prune_ignore_state(result.state, now)
+            self._rebuild_policy_index()
             changed_keys = {
                 (str(row.get("scope") or ""), str(row.get("target_id") or ""))
                 for row in result.changed
@@ -359,11 +367,15 @@ class AttentionIgnoreService:
     def _policy(self, scope: str, target_id: str) -> IgnorePolicy | None:
         if not self.storage_ready:
             return None
-        now = float(self._wall_clock())
-        for policy in self._state.policies:
-            if policy.scope == scope and policy.target_id == target_id and policy.expires_at > now:
-                return policy
-        return None
+        policy = self._policy_map.get((scope, target_id))
+        if policy is None:
+            return None
+        if policy.expires_at <= float(self._wall_clock()):
+            # Expiry is fail-open on the hot path. Persistent pruning happens on the
+            # next mutation/reload; we never perform storage I/O per event.
+            self._guard.clear({(scope, target_id)})
+            return None
+        return policy
 
     def has_policy(self, scope: Any, target_id: Any) -> bool:
         try:
