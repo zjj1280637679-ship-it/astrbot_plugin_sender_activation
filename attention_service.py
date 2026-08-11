@@ -64,6 +64,7 @@ class IgnoreDecision:
 @dataclass(slots=True)
 class _GuardSlot:
     events: deque[float]
+    cumulative_count: int = 0
     blocked_until: float = 0.0
 
 
@@ -145,8 +146,13 @@ class ObjectAttentionGuard:
                 threshold = monotonic_now - policy.trigger_window_seconds
                 while slot.events and slot.events[0] <= threshold:
                     slot.events.popleft()
-            slot.events.append(monotonic_now)
-            observed = len(slot.events)
+                slot.events.append(monotonic_now)
+                observed = len(slot.events)
+            else:
+                # A pure lifetime counter needs no per-event timestamps. Keeping a deque
+                # here would let a high configured threshold become a memory amplifier.
+                slot.cumulative_count += 1
+                observed = slot.cumulative_count
             if observed < policy.trigger_count:
                 self._metrics["observed_below_threshold"] += 1
                 return IgnoreDecision(
@@ -167,6 +173,7 @@ class ObjectAttentionGuard:
             ignore_for = min(float(policy.ignore_duration_seconds), policy_remaining)
             slot.blocked_until = monotonic_now + max(0.0, ignore_for)
             slot.events.clear()
+            slot.cumulative_count = 0
             self._metrics["ignore_triggered"] += 1
             return IgnoreDecision(
                 matched=True,
@@ -186,9 +193,13 @@ class ObjectAttentionGuard:
         with self._lock:
             now = float(self._clock())
             active_blocks = sum(slot.blocked_until > now for slot in self._slots.values())
+            event_samples = sum(len(slot.events) for slot in self._slots.values())
+            cumulative_slots = sum(slot.cumulative_count > 0 for slot in self._slots.values())
             return {
                 "ignore_guard_slots": len(self._slots),
                 "ignore_guard_active_blocks": active_blocks,
+                "ignore_guard_event_samples": event_samples,
+                "ignore_guard_cumulative_slots": cumulative_slots,
                 "ignore_guard_metrics": dict(self._metrics),
             }
 

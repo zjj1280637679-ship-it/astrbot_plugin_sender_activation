@@ -128,6 +128,26 @@ async def test_ignore_core() -> None:
     d5 = service.evaluate_activation_attempt(SCOPE, A)
     assert not d5.ignored and d5.observed_count == 1
 
+    # Counterexample: window=0 is pure lifetime counting and must not retain one
+    # timestamp per event. Large configured counts stay O(1) in event-sample memory.
+    await service.manage(
+        scope=SCOPE,
+        action="clear",
+        target_ids=[A],
+        trigger_count=0,
+        trigger_window_seconds=0,
+        ignore_duration_seconds=0,
+        policy_seconds=0,
+        created_by="agent:test",
+    )
+    await set_policy(service, trigger_count=50, window=0, ignore_seconds=20, policy_seconds=100)
+    for expected in range(1, 26):
+        decision = service.evaluate_activation_attempt(SCOPE, A)
+        assert not decision.ignored and decision.observed_count == expected
+    guard_health = service._guard.health()
+    assert guard_health["ignore_guard_event_samples"] == 0
+    assert guard_health["ignore_guard_cumulative_slots"] == 1
+
     # Sliding-window counterexample: an old event outside the window must not contribute.
     await service.manage(
         scope=SCOPE,
