@@ -1,0 +1,72 @@
+name: rc19 latest-head full audit
+
+on:
+  push:
+    branches:
+      - agent/rc19-attention-runtime
+
+permissions:
+  contents: read
+
+jobs:
+  full-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install exact AstrBot runtime
+        run: |
+          git clone --depth 1 --branch master https://github.com/AstrBotDevs/AstrBot.git /tmp/AstrBot
+          python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('/tmp/AstrBot/pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+          print('AstrBot source version:', version)
+          assert version == '4.27.2', version
+          PY
+          python -m pip install --user -e /tmp/AstrBot
+
+      - name: Static source audit
+        run: |
+          python -m py_compile \
+            main.py settings.py domain.py service.py storage.py \
+            attention_domain.py attention_service.py echo_service.py \
+            heartbeat_domain.py heartbeat_gate.py heartbeat_service.py cron_adapter.py \
+            activation_reservation.py access_domain.py access_service.py session_gate.py
+          python -m json.tool _conf_schema.json >/dev/null
+          grep -q 'VERSION = "1.1.0-rc.19"' main.py
+          grep -q 'version: "1.1.0-rc.19"' metadata.yaml
+          grep -q 'astrbot_version: ">=4.26.1"' metadata.yaml
+          git diff --check
+
+      - name: Run low-level attention and Echo counterexamples
+        run: |
+          cd ..
+          python astrbot_plugin_sender_activation/.github/rc19_core_tests.py
+
+      - name: Run heartbeat preflight counterexamples
+        run: |
+          cd ..
+          python astrbot_plugin_sender_activation/.github/rc19_heartbeat_gate_tests.py
+
+      - name: Run heartbeat lifecycle truth counterexamples
+        run: |
+          cd ..
+          python astrbot_plugin_sender_activation/.github/rc19_heartbeat_truth_tests.py
+
+      - name: Run deterministic concurrency boundary counterexamples
+        run: |
+          cd ..
+          python astrbot_plugin_sender_activation/.github/rc19_concurrency_boundary.py
+
+      - name: Run AstrBot host-level integration counterexamples
+        run: |
+          cd ..
+          python astrbot_plugin_sender_activation/.github/rc19_runtime_integration.py
+
+      - name: Candidate summary
+        run: |
+          echo "head=$GITHUB_SHA"
+          git diff --stat origin/main...HEAD || true
+          git status --short
