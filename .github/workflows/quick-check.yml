@@ -1,0 +1,31 @@
+name: quick check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quick-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Static checks
+        run: |
+          python --version
+          python -m py_compile \
+            attention_domain.py attention_service.py echo_service.py \
+            heartbeat_domain.py heartbeat_gate.py cron_adapter.py
+          python -m json.tool _conf_schema.json >/dev/null
+          git diff --check
+
+      - name: Run low-cost invariant tests
+        run: |
+          python tests/test_attention_runtime_core.py
+          python tests/test_heartbeat_gate.py
+          python tests/test_concurrency_boundary.py

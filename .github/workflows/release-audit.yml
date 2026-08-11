@@ -1,23 +1,29 @@
-name: rc19 latest-head full audit
+name: release audit
 
 on:
-  push:
-    branches:
-      - agent/rc19-attention-runtime
+  workflow_dispatch:
+  pull_request:
+    types: [ready_for_review, synchronize, reopened]
 
 permissions:
   contents: read
 
+env:
+  ASTRBOT_BASELINE_TAG: v4.27.2
+  ASTRBOT_BASELINE_SHA: ad4fbfa90ca0c4ac2b30b3250e34dbf8fe7babbf
+
 jobs:
-  full-audit:
+  release-audit:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install exact AstrBot runtime
+      - name: Install pinned AstrBot runtime
         run: |
-          git clone --depth 1 --branch master https://github.com/AstrBotDevs/AstrBot.git /tmp/AstrBot
+          git clone --depth 1 --branch "$ASTRBOT_BASELINE_TAG" https://github.com/AstrBotDevs/AstrBot.git /tmp/AstrBot
+          test "$(git -C /tmp/AstrBot rev-parse HEAD)" = "$ASTRBOT_BASELINE_SHA"
           python - <<'PY'
           import tomllib
           from pathlib import Path
@@ -40,33 +46,15 @@ jobs:
           grep -q 'astrbot_version: ">=4.26.1"' metadata.yaml
           git diff --check
 
-      - name: Run low-level attention and Echo counterexamples
+      - name: Run invariant regression suite
         run: |
-          cd ..
-          python astrbot_plugin_sender_activation/.github/rc19_core_tests.py
-
-      - name: Run heartbeat preflight counterexamples
-        run: |
-          cd ..
-          python astrbot_plugin_sender_activation/.github/rc19_heartbeat_gate_tests.py
-
-      - name: Run heartbeat lifecycle truth counterexamples
-        run: |
-          cd ..
-          python astrbot_plugin_sender_activation/.github/rc19_heartbeat_truth_tests.py
-
-      - name: Run deterministic concurrency boundary counterexamples
-        run: |
-          cd ..
-          python astrbot_plugin_sender_activation/.github/rc19_concurrency_boundary.py
-
-      - name: Run AstrBot host-level integration counterexamples
-        run: |
-          cd ..
-          python astrbot_plugin_sender_activation/.github/rc19_runtime_integration.py
+          python tests/test_attention_runtime_core.py
+          python tests/test_heartbeat_gate.py
+          python tests/test_heartbeat_truth.py
+          python tests/test_concurrency_boundary.py
+          python tests/test_astrbot_runtime.py
 
       - name: Candidate summary
         run: |
           echo "head=$GITHUB_SHA"
-          git diff --stat origin/main...HEAD || true
           git status --short
