@@ -32,6 +32,7 @@ from .attention_service import (
 from .cron_adapter import AstrBotCronAdapter
 from .domain import DomainError, normalize_scope
 from .heartbeat_domain import HEARTBEAT_TAG, is_owned_heartbeat_payload
+from .heartbeat_gate import HeartbeatWakeGate
 from .heartbeat_service import HeartbeatService
 from .echo_service import (
     ECHO_EFFECT_CONTRACT,
@@ -400,9 +401,14 @@ class SenderActivationPlugin(Star):
                 backup_key=ACCESS_BACKUP_KEY,
             ),
         )
+        self.heartbeat_wake_gate = HeartbeatWakeGate(
+            getattr(context, "cron_manager", None),
+            preflight=self._heartbeat_preflight,
+        )
         self.heartbeat_service = HeartbeatService(
             self.settings,
-            AstrBotCronAdapter(context),
+            AstrBotCronAdapter(context, active_execution_enabled=False),
+            self.heartbeat_wake_gate,
         )
         self.activation_reservations = ActivationReservationCoordinator(
             self.settings.activation_min_interval_seconds,
@@ -555,6 +561,12 @@ class SenderActivationPlugin(Star):
 
     async def _echo_preflight(self, scope: str) -> bool:
         if self._terminated or not self.settings.echo_enabled:
+            return False
+        status = await self._session_status(scope)
+        return status.enabled is not False
+
+    async def _heartbeat_preflight(self, scope: str) -> bool:
+        if self._terminated:
             return False
         status = await self._session_status(scope)
         return status.enabled is not False
