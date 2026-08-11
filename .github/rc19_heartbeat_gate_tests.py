@@ -10,7 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT.parent) not in sys.path:
     sys.path.insert(0, str(ROOT.parent))
 
-from astrbot_plugin_sender_activation.heartbeat_domain import HeartbeatLease  # noqa: E402
+from astrbot_plugin_sender_activation.heartbeat_domain import (  # noqa: E402
+    HeartbeatLease,
+    heartbeat_payload,
+)
 from astrbot_plugin_sender_activation.heartbeat_gate import (  # noqa: E402
     DRIVER_CLEANUP_TAG,
     DRIVER_TAG,
@@ -85,9 +88,22 @@ def lease(lease_id="hb-1", *, expires=2000.0):
     )
 
 
+def active_payload(*, expires=2000.0):
+    return heartbeat_payload(
+        scope=SCOPE,
+        sender_id="123456789",
+        instruction="check group",
+        name="watch",
+        created_at=1000.0,
+        expires_at=expires,
+        created_by="agent:test",
+        source="tool",
+    )
+
+
 async def main() -> None:
     manager = Manager()
-    manager.active["hb-1"] = Job("hb-1", {"dummy": True}, False)
+    manager.active["hb-1"] = Job("hb-1", active_payload(), False, "*/5 * * * *")
     gate_flag = {"allowed": False}
     gate = HeartbeatWakeGate(manager, preflight=lambda _scope: gate_flag["allowed"], wall_clock=lambda: 1100.0)
     await gate.initialize()
@@ -114,7 +130,7 @@ async def main() -> None:
     assert driver.job_id not in manager.basic
 
     # Hot reload: stale runtime drivers are removed and rebuilt only from live leases.
-    manager.active["hb-2"] = Job("hb-2", {"dummy": True}, False)
+    manager.active["hb-2"] = Job("hb-2", active_payload(expires=2100.0), False, "*/5 * * * *")
     first = await gate.arm(lease("hb-2", expires=2100.0))
     assert first.enabled
     stale_driver_ids = {j.job_id for j in manager.basic.values() if DRIVER_TAG in j.payload}
