@@ -218,7 +218,10 @@ class HeartbeatWakeGate:
                 cron_expression=lease.cron_expression,
                 handler=self._driver_handler,
                 description="在主 Agent 心跳激活前检查当前会话权限。",
-                timezone="UTC",
+                # Preserve rc18/AstrBot semantics: heartbeat cron expressions use the
+                # host scheduler's default timezone unless the original template had an
+                # explicit timezone. The old active template did not force UTC.
+                timezone=None,
                 payload=payload,
                 enabled=True,
                 persistent=False,

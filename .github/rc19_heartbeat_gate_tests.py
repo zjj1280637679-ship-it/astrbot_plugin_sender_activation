@@ -30,6 +30,7 @@ class Job:
     enabled: bool = True
     cron_expression: str | None = None
     next_run_time: float | None = None
+    timezone: str | None = None
 
 
 class Manager:
@@ -49,6 +50,7 @@ class Manager:
             bool(kwargs.get("enabled", True)),
             kwargs.get("cron_expression"),
             1234.0,
+            kwargs.get("timezone"),
         )
         self.basic[jid] = job
         self.handlers[jid] = handler
@@ -103,7 +105,7 @@ def active_payload(*, expires=2000.0):
 
 async def main() -> None:
     manager = Manager()
-    manager.active["hb-1"] = Job("hb-1", active_payload(), False, "*/5 * * * *")
+    manager.active["hb-1"] = Job(job_id="hb-1", payload=active_payload(), enabled=False, cron_expression="*/5 * * * *")
     gate_flag = {"allowed": False}
     gate = HeartbeatWakeGate(manager, preflight=lambda _scope: gate_flag["allowed"], wall_clock=lambda: 1100.0)
     await gate.initialize()
@@ -113,6 +115,11 @@ async def main() -> None:
     cleanups = [j for j in manager.basic.values() if DRIVER_CLEANUP_TAG in j.payload]
     assert len(drivers) == 1 and len(cleanups) == 1
     driver = drivers[0]
+
+    # Recurring heartbeat keeps the old host-default timezone. Expiry cleanup is
+    # absolute wall-clock time and remains UTC.
+    assert driver.timezone is None
+    assert cleanups[0].timezone == "UTC"
 
     # Disabled session: driver fires, but no native Agent activation is consumed.
     await manager.handlers[driver.job_id](**driver.payload)
@@ -130,7 +137,7 @@ async def main() -> None:
     assert driver.job_id not in manager.basic
 
     # Hot reload: stale runtime drivers are removed and rebuilt only from live leases.
-    manager.active["hb-2"] = Job("hb-2", active_payload(expires=2100.0), False, "*/5 * * * *")
+    manager.active["hb-2"] = Job(job_id="hb-2", payload=active_payload(expires=2100.0), enabled=False, cron_expression="*/5 * * * *")
     first = await gate.arm(lease("hb-2", expires=2100.0))
     assert first.enabled
     stale_driver_ids = {j.job_id for j in manager.basic.values() if DRIVER_TAG in j.payload}
