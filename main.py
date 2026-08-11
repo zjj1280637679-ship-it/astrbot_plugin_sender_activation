@@ -385,9 +385,11 @@ class SenderActivationPlugin(Star):
                 backup_key=ATTENTION_BACKUP_KEY,
             ),
         )
+        self.session_gate = AstrBotSessionGate(PLUGIN_NAME, sp)
         self.echo_service = EchoService(
             self.settings.echo_limits,
             getattr(context, "cron_manager", None),
+            preflight=self._echo_preflight,
         )
         self.access_service = AccessService(
             self.settings,
@@ -405,7 +407,6 @@ class SenderActivationPlugin(Star):
             self.settings.activation_min_interval_seconds,
             max_slots=self.settings.limits.max_targets_total,
         )
-        self.session_gate = AstrBotSessionGate(PLUGIN_NAME, sp)
         self._terminated = False
         self._yield_count = 0
 
@@ -550,6 +551,12 @@ class SenderActivationPlugin(Star):
 
     async def _session_status(self, scope: str) -> SessionGateStatus:
         return await self.session_gate.read(scope)
+
+    async def _echo_preflight(self, scope: str) -> bool:
+        if self._terminated or not self.settings.echo_enabled:
+            return False
+        status = await self._session_status(scope)
+        return status.enabled is not False
 
     def _host_config_report(self, scope: str | None) -> dict[str, Any]:
         scope_specific = scope is not None

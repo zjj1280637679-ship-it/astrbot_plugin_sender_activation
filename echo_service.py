@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import inspect
 import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .domain import DomainError, normalize_scope
@@ -151,7 +154,7 @@ def echo_from_job(job: Any) -> EchoHook:
         created_by=created_by,
         batch_index=batch_index,
         batch_count=batch_count,
-        enabled=bool(getattr(job, "enabled", False)),
+        enabled=bool(tag.get("armed", True)),
         status=str(getattr(job, "status", "unknown") or "unknown"),
     )
 
@@ -163,18 +166,25 @@ class EchoService:
         cron_manager: Any,
         *,
         wall_clock=time.time,
+        preflight: Callable[[str], bool | Awaitable[bool]] | None = None,
+        sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.limits = limits
         self._manager = cron_manager
         self._wall_clock = wall_clock
+        self._preflight = preflight
+        self._sleeper = sleeper
         self._active = False
         self._created = 0
         self._cancelled = 0
+        self._preflight_suppressed = 0
+        self._executed = 0
+        self._tasks: dict[str, asyncio.Task[None]] = {}
         self._quarantined: list[dict[str, str]] = []
 
     def _require_manager(self) -> Any:
         manager = self._manager
-        required = ("add_active_job", "delete_job", "list_jobs")
+        required = ("add_active_job", "delete_job", "list_jobs", "run_job_now")
         if manager is None or any(not callable(getattr(manager, name, None)) for name in required):
             raise DomainError("echo_native_scheduler_unavailable", "当前 AstrBot 未提供兼容的原生一次性主动任务接口。")
         return manager
@@ -190,8 +200,73 @@ class EchoService:
         jobs = await manager.list_jobs("active_agent")
         return [job for job in jobs if is_owned_echo_payload(getattr(job, "payload", None))]
 
+    async def _preflight_allowed(self, scope: str) -> bool:
+        if not self._active:
+            return False
+        callback = self._preflight
+        if callback is None:
+            return True
+        try:
+            result = callback(scope)
+            if inspect.isawaitable(result):
+                result = await result
+            return bool(result)
+        except Exception:
+            return False
+
+    async def _delete_owned_job(self, hook_id: str) -> None:
+        task = self._tasks.pop(hook_id, None)
+        current = asyncio.current_task()
+        if task is not None and task is not current and not task.done():
+            task.cancel()
+        try:
+            await self._require_manager().delete_job(hook_id)
+        except Exception:
+            # Cancellation is idempotent; an already-consumed/deleted native row is fine.
+            pass
+
+    async def _execute_armed_hook(self, hook_id: str, scope: str) -> None:
+        if not await self._preflight_allowed(scope):
+            self._preflight_suppressed += 1
+            await self._delete_owned_job(hook_id)
+            return
+        manager = self._require_manager()
+        try:
+            # The native job is deliberately stored disabled, so AstrBot cannot bypass
+            # this preflight. run_job_now(ignore_enabled=True) is the only execution path.
+            await manager.run_job_now(hook_id)
+            self._executed += 1
+        finally:
+            await self._delete_owned_job(hook_id)
+
+    async def _wait_and_execute(self, hook_id: str, scope: str, delay: float) -> None:
+        try:
+            await self._sleeper(max(0.0, delay))
+            if self._active:
+                await self._execute_armed_hook(hook_id, scope)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._quarantined.append(
+                {"hook_id": hook_id, "error_code": f"echo_execute_{type(exc).__name__}"}
+            )
+            await self._delete_owned_job(hook_id)
+        finally:
+            self._tasks.pop(hook_id, None)
+
+    def _arm_task(self, hook_id: str, scope: str, run_at: float) -> None:
+        delay = max(0.0, run_at - float(self._wall_clock()))
+        task = asyncio.create_task(
+            self._wait_and_execute(hook_id, scope, delay),
+            name=f"sender-echo-{hook_id}",
+        )
+        self._tasks[hook_id] = task
+
     async def initialize(self) -> None:
         self._active = False
+        for task in list(self._tasks.values()):
+            task.cancel()
+        self._tasks.clear()
         self._quarantined.clear()
         try:
             # Echo hooks are intentionally non-persistent. Any rows surviving a plugin or
@@ -217,6 +292,12 @@ class EchoService:
 
     async def terminate(self) -> list[str]:
         self._active = False
+        tasks = list(self._tasks.values())
+        self._tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         failures: list[str] = []
         try:
             jobs = await self._raw_owned_jobs()
@@ -348,6 +429,7 @@ class EchoService:
                         "created_by": creator,
                         "batch_index": index + 1,
                         "batch_count": batch_count,
+                        "armed": True,
                     },
                 }
                 job = await manager.add_active_job(
@@ -356,16 +438,17 @@ class EchoService:
                     payload=payload,
                     description="本插件有限、不可递归的一次性回响钩子。",
                     timezone="UTC",
-                    enabled=True,
+                    enabled=False,
                     persistent=False,
                     run_once=True,
                     run_at=datetime.fromtimestamp(run_at, tz=timezone.utc),
                 )
                 created_jobs.append(job)
+                self._arm_task(str(getattr(job, "job_id", "")), normalized_scope, run_at)
         except Exception as exc:
             for job in created_jobs:
                 try:
-                    await manager.delete_job(str(getattr(job, "job_id", "")))
+                    await self._delete_owned_job(str(getattr(job, "job_id", "")))
                 except Exception:
                     pass
             if isinstance(exc, DomainError):
@@ -417,7 +500,7 @@ class EchoService:
                 continue
             if not hook_set and not group_set:
                 continue
-            await manager.delete_job(hook.hook_id)
+            await self._delete_owned_job(hook.hook_id)
             removed.append(hook.hook_id)
         self._cancelled += len(removed)
         return {
@@ -445,7 +528,7 @@ class EchoService:
                 continue
             if hook.scope != normalized_scope:
                 continue
-            await manager.delete_job(hook.hook_id)
+            await self._delete_owned_job(hook.hook_id)
             removed.append(hook.hook_id)
         self._cancelled += len(removed)
         return removed
@@ -481,6 +564,9 @@ class EchoService:
             "echo_pending": pending,
             "echo_created_total": self._created,
             "echo_cancelled_total": self._cancelled,
+            "echo_executed_total": self._executed,
+            "echo_preflight_suppressed_total": self._preflight_suppressed,
+            "echo_timer_tasks": len(self._tasks),
             "echo_quarantined_count": quarantined,
             "echo_last_error": error,
         }

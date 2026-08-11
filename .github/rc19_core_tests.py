@@ -221,6 +221,7 @@ class FakeCronManager:
     def __init__(self) -> None:
         self.jobs: dict[str, FakeJob] = {}
         self.calls: list[dict[str, Any]] = []
+        self.run_calls: list[str] = []
         self.next_id = 1
         self.fail_on_add_number: int | None = None
 
@@ -245,6 +246,10 @@ class FakeCronManager:
 
     async def delete_job(self, job_id: str):
         self.jobs.pop(job_id, None)
+
+    async def run_job_now(self, job_id: str):
+        if job_id in self.jobs:
+            self.run_calls.append(job_id)
 
 
 async def test_echo_core() -> None:
@@ -279,6 +284,7 @@ async def test_echo_core() -> None:
     for index, call in enumerate(manager.calls):
         assert call["run_once"] is True
         assert call["persistent"] is False
+        assert call["enabled"] is False
         assert call["cron_expression"] is None
         tag = call["payload"][ECHO_TAG]
         assert tag["kind"] == ECHO_KIND
@@ -345,6 +351,55 @@ async def test_echo_core() -> None:
         raise AssertionError("partial scheduling failure unexpectedly succeeded")
     assert manager2.jobs == {}
 
+    # Permission/session preflight runs before any main-Agent execution.
+    gate = {"allowed": False}
+    gated_manager = FakeCronManager()
+    gated = EchoService(
+        limits,
+        gated_manager,
+        wall_clock=wall,
+        preflight=lambda _scope: gate["allowed"],
+    )
+    await gated.initialize()
+    blocked = await gated.create(
+        scope=SCOPE,
+        sender_id=A,
+        actor_ref="agent:test",
+        source="native_wake",
+        delay_seconds=2,
+        count=1,
+        interval_seconds=4,
+        instruction="preflight block",
+    )
+    blocked_id = blocked["hooks"][0]["hook_id"]
+    timer = gated._tasks.pop(blocked_id)
+    timer.cancel()
+    await asyncio.gather(timer, return_exceptions=True)
+    await gated._execute_armed_hook(blocked_id, SCOPE)
+    assert gated_manager.run_calls == []
+    assert blocked_id not in gated_manager.jobs
+    assert (await gated.health())["echo_preflight_suppressed_total"] == 1
+
+    gate["allowed"] = True
+    allowed = await gated.create(
+        scope=SCOPE,
+        sender_id=A,
+        actor_ref="agent:test",
+        source="native_wake",
+        delay_seconds=2,
+        count=1,
+        interval_seconds=4,
+        instruction="preflight allow",
+    )
+    allowed_id = allowed["hooks"][0]["hook_id"]
+    timer = gated._tasks.pop(allowed_id)
+    timer.cancel()
+    await asyncio.gather(timer, return_exceptions=True)
+    await gated._execute_armed_hook(allowed_id, SCOPE)
+    assert gated_manager.run_calls == [allowed_id]
+    assert allowed_id not in gated_manager.jobs
+    await gated.terminate()
+
     # Restart/reload cannot resurrect pending Echo hooks: initialization deletes stale owned rows.
     stale_manager = FakeCronManager()
     stale_payload = {
@@ -367,6 +422,8 @@ async def test_echo_core() -> None:
     cleanup_service = EchoService(limits, stale_manager, wall_clock=wall)
     await cleanup_service.initialize()
     assert stale_manager.jobs == {}
+    await service.terminate()
+    await cleanup_service.terminate()
 
 
 async def main() -> None:
