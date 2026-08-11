@@ -1,0 +1,37 @@
+name: rc19 cumulative counter memory patch
+
+on:
+  push:
+    branches:
+      - agent/rc19-attention-runtime
+
+permissions:
+  contents: write
+
+jobs:
+  counter-memory:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - name: Apply resource fix and run counterexamples
+        run: |
+          python .github/rc19_counter_memory_patch.py
+          python -m py_compile attention_service.py .github/rc19_core_tests.py
+          cd ..
+          python astrbot_plugin_sender_activation/.github/rc19_core_tests.py
+          cd astrbot_plugin_sender_activation
+          git diff --check
+      - name: Commit clean candidate diff
+        run: |
+          rm .github/rc19_counter_memory_patch.py .github/workflows/rc19_counter_memory_patch.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          git add attention_service.py .github/rc19_core_tests.py .github/rc19_counter_memory_patch.py .github/workflows/rc19_counter_memory_patch.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'perf: keep lifetime ignore counters O(1) memory'
+          git push origin HEAD:${{ github.ref_name }}
