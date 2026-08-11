@@ -11,6 +11,7 @@ from typing import Any
 
 from .cron_adapter import AstrBotCronAdapter
 from .domain import DomainError, normalize_scope
+from .heartbeat_gate import HeartbeatWakeGate
 from .heartbeat_domain import (
     HeartbeatLease,
     normalize_cron_expression,
@@ -30,11 +31,13 @@ class HeartbeatService:
         self,
         settings: PluginSettings,
         adapter: AstrBotCronAdapter,
+        wake_gate: HeartbeatWakeGate | None = None,
         *,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self.settings = settings
         self._adapter = adapter
+        self._wake_gate = wake_gate
         self._wall_clock = wall_clock
         self._lock = asyncio.Lock()
         self._active = False
@@ -45,9 +48,18 @@ class HeartbeatService:
         async with self._lock:
             self._active = True
             try:
-                _leases, quarantined = await self._adapter.reconcile_start(
+                leases, quarantined = await self._adapter.reconcile_start(
                     float(self._wall_clock())
                 )
+                if self._wake_gate is not None:
+                    await self._wake_gate.initialize()
+                    for lease in leases:
+                        try:
+                            await self._wake_gate.arm(lease)
+                        except DomainError as exc:
+                            quarantined.append(
+                                {"lease_id": lease.lease_id, "error_code": exc.code}
+                            )
                 self._quarantined = quarantined
                 self.last_error_code = None
             except DomainError as exc:
@@ -58,8 +70,11 @@ class HeartbeatService:
     async def terminate(self) -> list[str]:
         async with self._lock:
             self._active = False
+            gate_failures: list[str] = []
+            if self._wake_gate is not None:
+                gate_failures = await self._wake_gate.terminate()
             try:
-                return await self._adapter.suspend_for_shutdown()
+                return [*gate_failures, *await self._adapter.suspend_for_shutdown()]
             except DomainError as exc:
                 self.last_error_code = exc.code
                 return ["native_cron_unavailable"]
@@ -85,6 +100,8 @@ class HeartbeatService:
                 )
             else:
                 active.append(lease)
+        if self._wake_gate is not None:
+            active = await self._wake_gate.decorate(active)
         return active
 
     @staticmethod
@@ -181,6 +198,12 @@ class HeartbeatService:
                     created_at=now,
                     expires_at=self._native_minute_expiry(now, duration),
                 )
+                if self._wake_gate is not None:
+                    try:
+                        lease = await self._wake_gate.arm(lease)
+                    except Exception:
+                        await self._adapter.delete(lease.lease_id, normalized_scope)
+                        raise
                 return self._success(
                     outcome="heartbeat_created",
                     changed=True,
@@ -197,6 +220,8 @@ class HeartbeatService:
             if normalized_action == "disable":
                 changed = False
                 for lease_id in ids:
+                    if self._wake_gate is not None:
+                        await self._wake_gate.disarm(lease_id)
                     if await self._adapter.delete(lease_id, normalized_scope):
                         changed = True
                 return self._success(
@@ -243,6 +268,15 @@ class HeartbeatService:
                     now=now,
                     expires_at=self._native_minute_expiry(now, duration),
                 )
+                if self._wake_gate is not None:
+                    try:
+                        updated = await self._wake_gate.arm(updated)
+                    except Exception as exc:
+                        self.last_error_code = "heartbeat_preflight_update_indeterminate"
+                        raise DomainError(
+                            "heartbeat_preflight_update_indeterminate",
+                            "心跳模板已更新但前置门重建失败；模板保持禁用，当前不会主动唤醒，需查询后重试。",
+                        ) from exc
                 renewed.append(updated)
             return self._success(
                 outcome="heartbeat_renewed",
@@ -280,9 +314,15 @@ class HeartbeatService:
 
     async def health(self) -> dict[str, Any]:
         snapshot = await self.snapshot(scope_ref=lambda value: value)
+        gate_health = (
+            await self._wake_gate.health()
+            if self._wake_gate is not None
+            else {"heartbeat_preflight_active": False}
+        )
         return {
             "heartbeat_service_active": self._active,
             "heartbeat_count": len(snapshot["heartbeat_leases"]),
             "heartbeat_quarantined_count": len(snapshot["quarantined"]),
             "heartbeat_last_error_code": self.last_error_code,
+            **gate_health,
         }
