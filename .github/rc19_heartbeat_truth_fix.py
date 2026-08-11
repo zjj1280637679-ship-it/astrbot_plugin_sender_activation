@@ -39,21 +39,51 @@ assert old in t
 t = t.replace(old, new, 1)
 p.write_text(t, encoding='utf-8')
 
-# Error contract must report uncertainty, never 'not applied'.
+# Error contract must report uncertainty, never 'not applied'. Also register all
+# preflight errors that the integration patch introduced.
 p = Path('main.py')
 t = p.read_text(encoding='utf-8')
-old = '''        "native_cron_update_indeterminate",
+old = '''        "attention_commit_indeterminate",
+        "native_cron_update_indeterminate",
     }
 '''
-new = '''        "native_cron_update_indeterminate",
+new = '''        "attention_commit_indeterminate",
+        "native_cron_update_indeterminate",
         "heartbeat_preflight_update_indeterminate",
     }
 '''
 assert old in t
 t = t.replace(old, new, 1)
-anchor = '    "heartbeat_preflight_create_failed": ("host_runtime", "inspect_native_cron", True),\n'
-extra = '    "heartbeat_preflight_update_indeterminate": ("host_runtime", "query_heartbeat_then_retry", False),\n'
+
+anchor = '''    "heartbeat_service_inactive": (
+        "host_capability",
+        "inspect_heartbeat_health",
+        False,
+    ),
+'''
+extra = '''    "heartbeat_preflight_unavailable": (
+        "host_capability",
+        "inspect_native_cron",
+        False,
+    ),
+    "heartbeat_preflight_inactive": (
+        "host_capability",
+        "inspect_native_cron",
+        False,
+    ),
+    "heartbeat_preflight_create_failed": (
+        "host_runtime",
+        "inspect_native_cron",
+        True,
+    ),
+    "heartbeat_preflight_update_indeterminate": (
+        "host_runtime",
+        "query_heartbeat_then_retry",
+        False,
+    ),
+'''
 assert anchor in t
-if extra not in t:
+if '"heartbeat_preflight_update_indeterminate": (' not in t:
     t = t.replace(anchor, anchor + extra, 1)
+
 p.write_text(t, encoding='utf-8')
