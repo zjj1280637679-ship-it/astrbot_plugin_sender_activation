@@ -1,0 +1,36 @@
+name: rc19 proven-boundary docs patch
+
+on:
+  push:
+    branches:
+      - agent/rc19-attention-runtime
+
+permissions:
+  contents: write
+
+jobs:
+  docs:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - name: Apply candidate docs and validate anchors
+        run: |
+          python .github/rc19_docs_patch.py
+          grep -q 'rc19 候选说明' README.md
+          grep -q 'run_job_now' README.md
+          grep -q 'M = A_native ∪ {I, H, L_i, N, E, Y}' README.md
+          grep -q '当前在途一次可能完成' skills/group-duty-orchestration/SKILL.md
+          git diff --check
+      - name: Commit clean docs diff
+        run: |
+          rm .github/rc19_docs_patch.py .github/workflows/rc19_docs_patch.yml
+          git add README.md skills/group-duty-orchestration/SKILL.md .github/rc19_docs_patch.py .github/workflows/rc19_docs_patch.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'docs: state rc19 proven scope and execution boundaries'
+          git push origin HEAD:${{ github.ref_name }}
