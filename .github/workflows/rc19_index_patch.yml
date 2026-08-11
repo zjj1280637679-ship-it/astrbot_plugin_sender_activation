@@ -1,0 +1,34 @@
+name: rc19 policy index patch
+
+on:
+  push:
+    branches:
+      - agent/rc19-attention-runtime
+
+permissions:
+  contents: write
+
+jobs:
+  patch-index:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - name: Apply index patch and validate
+        run: |
+          python .github/rc19_index_patch.py
+          python -m py_compile attention_domain.py attention_service.py echo_service.py
+          git diff --check
+      - name: Commit clean source diff
+        run: |
+          rm .github/rc19_index_patch.py .github/workflows/rc19_index_patch.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          git add attention_service.py .github/rc19_index_patch.py .github/workflows/rc19_index_patch.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'perf: index object attention policies by ID'
+          git push origin HEAD:${{ github.ref_name }}
