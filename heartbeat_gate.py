@@ -179,11 +179,19 @@ class HeartbeatWakeGate:
         self._active = False
         self._failures.clear()
         # Drivers are non-persistent runtime mechanics. Rebuild them from heartbeat
-        # lease templates so a hot reload cannot duplicate recurrence.
+        # lease templates so a hot reload cannot duplicate recurrence. A surviving
+        # stale driver is more dangerous than temporarily losing heartbeats, so
+        # reconciliation is deliberately fail-closed.
+        failed: list[str] = []
         for job in [*await self._driver_jobs(), *await self._cleanup_jobs()]:
             job_id = str(getattr(job, "job_id", "") or "")
-            if job_id:
-                await self._delete_job_truthfully(job_id)
+            if job_id and not await self._delete_job_truthfully(job_id):
+                failed.append(job_id)
+        if failed:
+            raise DomainError(
+                "heartbeat_preflight_reconcile_failed",
+                "旧心跳前置门无法确认清理；为避免重复主动唤醒，本次不重建新前置门。",
+            )
         self._active = True
 
     async def terminate(self) -> list[str]:

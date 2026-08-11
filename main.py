@@ -171,6 +171,11 @@ _TOOL_ERROR_POLICIES: dict[str, tuple[str, str, bool]] = {
         "inspect_native_cron",
         True,
     ),
+    "heartbeat_preflight_reconcile_failed": (
+        "host_runtime",
+        "inspect_and_remove_stale_preflight_jobs",
+        False,
+    ),
     "heartbeat_preflight_update_indeterminate": (
         "host_runtime",
         "query_heartbeat_then_retry",
