@@ -4,7 +4,7 @@ desc: "用这款 AstrBot 插件，让你的 AI 获得限时免@的主动回复�
 short_desc: "限时免@：让 AstrBot AI 主动回复、持续关注，也能主动沉默"
 version: "1.1.0-rc.19"
 astrbot_version: ">=4.26.1"
-author: zjj1280637679-ship-it
+author: "羊膜大人"
 repo: "https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation"
 support_platforms:
   - aiocqhttp
