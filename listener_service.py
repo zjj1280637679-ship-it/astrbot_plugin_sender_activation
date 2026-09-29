@@ -998,7 +998,6 @@ class ListenerService:
     ) -> dict[str, Any]:
         normalized_scope = normalize_scope(scope)
         normalized_action = str(action or "").strip().lower()
-        owner = normalize_target_id(owner_sender_id)
 
         if normalized_action == "list":
             return {
@@ -1068,6 +1067,7 @@ class ListenerService:
                 "invalid_action",
                 "action 必须是 start、cancel 或 list。",
             )
+        owner = normalize_target_id(owner_sender_id)
         if not self.active:
             raise DomainError("listener_service_inactive", "统一监听服务当前未激活。")
         if not self.storage_ready:
@@ -1167,6 +1167,36 @@ class ListenerService:
                 watchdog_due_at=self._watchdog_due.get(listener_id),
             ),
         }
+
+    def owns_all(
+        self,
+        *,
+        scope: Any,
+        owner_sender_id: Any,
+        listener_ids: list[str] | None,
+    ) -> bool:
+        try:
+            normalized_scope = normalize_scope(scope)
+            owner = normalize_target_id(owner_sender_id)
+        except DomainError:
+            return False
+        ids = {
+            str(value or "").strip()
+            for value in (listener_ids or [])
+            if str(value or "").strip()
+        }
+        if not ids:
+            return False
+        selected = [
+            self._listeners.get(listener_id)
+            for listener_id in ids
+        ]
+        return all(
+            contract is not None
+            and contract.scope == normalized_scope
+            and contract.owner_sender_id == owner
+            for contract in selected
+        )
 
     async def snapshot(
         self,
