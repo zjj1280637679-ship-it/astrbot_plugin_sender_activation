@@ -120,7 +120,7 @@ CI 分层：
 - `integration-check.yml`：需要 AstrBot 宿主的集成测试；
 - `release-audit.yml`：PR 从 draft 进入 ready 后或 ready 状态继续变更时执行完整 release gate。
 
-AstrBot 宿主基线钉在 `v4.27.2`，并同时校验提交 `ad4fbfa90ca0c4ac2b30b3250e34dbf8fe7babbf`，避免上游 `master` 漂移导致候选证据失真。
+AstrBot 宿主兼容性检查固定覆盖 `v4.27.2`（`ad4fbfa90ca0c4ac2b30b3250e34dbf8fe7babbf`）与 `v4.28.2`（`3c7adafa1397e182d60b1016bf88759265113c8a`），并校验各自提交，避免上游 `master` 漂移导致候选证据失真。
 
 ## 7. 后续变更规则
 

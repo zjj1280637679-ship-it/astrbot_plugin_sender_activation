@@ -157,7 +157,7 @@ QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插�
 | AstrBot 配置 | 对插件的影响 |
 | --- | --- |
 | `provider_settings.enable` | 必须开启；关闭后租约最多只能产生 wake 机会，主 Agent 不会运行 |
-| `provider_settings.agent_runner_type` | 首版只验收内置 `local` Agent；第三方 Agent 执行器不在正式支持范围 |
+| `agent_runner.runner_type`（AstrBot 4.28 起；旧版为 `provider_settings.agent_runner_type`） | 首版只验收内置 `local` Agent；第三方 Agent 执行器不在正式支持范围 |
 | 当前对话模型的 `tool_use` 能力 | 必须具备，否则主 Agent 不能产生五个正式工具帧 |
 | `provider_settings.show_tool_use_status=false` | 要实现完全无可见回复时应关闭；否则宿主可能先发送工具调用状态 |
 | `provider_settings.identifier`（用户识别） | 使用“我、本人、刚才那个人”等表达时应开启，使主 Agent 获得真实 User ID；插件事件层仍会读取 ID，但模型看不到就无法可靠填写 `target_ids` |
@@ -181,7 +181,7 @@ AstrBot 原生机制发生的私聊 Agent 请求中检测当前 UMO 的生效配
 
 1. 打开“插件管理”。
 2. 使用仓库 URL 安装，或上传经验证的精简运行 ZIP。
-3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.1.0-rc.17`。
+3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.1.0-rc.19`。
 4. 在插件配置中检查对象激活、心跳、容量和限频上限。
 5. 打开插件详情中的“管理员的真理捍卫器控制台”页面，确认 `storage_ready` 为 `true`。
 

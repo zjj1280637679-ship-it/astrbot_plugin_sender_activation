@@ -8,15 +8,25 @@ on:
 permissions:
   contents: read
 
-env:
-  ASTRBOT_BASELINE_TAG: v4.27.2
-  ASTRBOT_BASELINE_SHA: ad4fbfa90ca0c4ac2b30b3250e34dbf8fe7babbf
-
 jobs:
   release-audit:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - astrbot_tag: v4.27.2
+            astrbot_sha: ad4fbfa90ca0c4ac2b30b3250e34dbf8fe7babbf
+            astrbot_version: 4.27.2
+          - astrbot_tag: v4.28.2
+            astrbot_sha: 3c7adafa1397e182d60b1016bf88759265113c8a
+            astrbot_version: 4.28.2
+    env:
+      ASTRBOT_BASELINE_TAG: ${{ matrix.astrbot_tag }}
+      ASTRBOT_BASELINE_SHA: ${{ matrix.astrbot_sha }}
+      ASTRBOT_BASELINE_VERSION: ${{ matrix.astrbot_version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +39,8 @@ jobs:
           from pathlib import Path
           version = tomllib.loads(Path('/tmp/AstrBot/pyproject.toml').read_text(encoding='utf-8'))['project']['version']
           print('AstrBot source version:', version)
-          assert version == '4.27.2', version
+          import os
+          assert version == os.environ['ASTRBOT_BASELINE_VERSION'], version
           PY
           python -m pip install --user -e /tmp/AstrBot
 
@@ -39,7 +50,8 @@ jobs:
             main.py settings.py domain.py service.py storage.py \
             attention_domain.py attention_service.py echo_service.py \
             heartbeat_domain.py heartbeat_gate.py heartbeat_service.py cron_adapter.py \
-            activation_reservation.py access_domain.py access_service.py session_gate.py
+            activation_reservation.py access_domain.py access_service.py session_gate.py \
+            host_diagnostics.py
           python -m json.tool _conf_schema.json >/dev/null
           grep -q 'VERSION = "1.1.0-rc.19"' main.py
           grep -q 'version: "1.1.0-rc.19"' metadata.yaml

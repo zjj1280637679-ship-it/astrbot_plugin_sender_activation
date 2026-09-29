@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,9 +20,11 @@ from astrbot_plugin_sender_activation.echo_service import (  # noqa: E402
     ECHO_TAG,
 )
 from astrbot_plugin_sender_activation.heartbeat_domain import heartbeat_payload  # noqa: E402
+from astrbot_plugin_sender_activation.host_diagnostics import evaluate_host_config  # noqa: E402
 from astrbot_plugin_sender_activation.main import SenderActivationPlugin  # noqa: E402
 from astrbot_plugin_sender_activation.settings import PluginSettings  # noqa: E402
 from astrbot.core.agent.tool import ToolSet  # noqa: E402
+from astrbot.core.config.default import DEFAULT_CONFIG  # noqa: E402
 from astrbot.core.cron.events import CronMessageEvent  # noqa: E402
 from astrbot.core.platform.message_session import MessageSession  # noqa: E402
 from astrbot.core.provider.register import llm_tools  # noqa: E402
@@ -283,6 +286,38 @@ def test_config_authority() -> None:
     assert elevated == same_without_model
 
 
+def test_host_agent_runner_diagnostic() -> None:
+    config = deepcopy(DEFAULT_CONFIG)
+    runner = config.get("agent_runner")
+    if isinstance(runner, dict):
+        runner["runner_type"] = "local"
+        expected_path = "agent_runner.runner_type"
+    else:
+        config["provider_settings"]["agent_runner_type"] = "local"
+        expected_path = "provider_settings.agent_runner_type"
+
+    local_report = evaluate_host_config(config, scope_specific=True)
+    local_check = next(
+        check for check in local_report["checks"] if check["id"] == "local_agent_runner"
+    )
+    assert local_check["path"] == expected_path
+    assert local_check["status"] == "pass"
+
+    if isinstance(runner, dict):
+        runner["runner_type"] = "dify"
+    else:
+        config["provider_settings"]["agent_runner_type"] = "dify"
+    third_party_report = evaluate_host_config(config, scope_specific=True)
+    third_party_check = next(
+        check
+        for check in third_party_report["checks"]
+        if check["id"] == "local_agent_runner"
+    )
+    assert third_party_check["status"] == "action_required"
+    assert third_party_check["observed"] == "non_local"
+    assert third_party_report["blocker_count"] >= 1
+
+
 async def test_guard_modes() -> None:
     for mode in ("extra_only", "suppress_llm", "stop_event"):
         plugin = object.__new__(SenderActivationPlugin)
@@ -346,6 +381,7 @@ async def main() -> None:
     test_owned_cron_context()
     test_error_contract()
     test_config_authority()
+    test_host_agent_runner_diagnostic()
     await test_guard_modes()
     await test_echo_preflight_gate()
     print("rc19 AstrBot runtime integration counterexamples: PASS")

@@ -28,7 +28,7 @@ HOST_CONFIG_CHECKS = (
     ),
     HostConfigCheck(
         check_id="local_agent_runner",
-        path=("provider_settings", "agent_runner_type"),
+        path=("agent_runner", "runner_type"),
         operator="equals",
         expected="local",
         severity="blocker",
@@ -168,7 +168,14 @@ def evaluate_host_config(
     unknown_count = 0
 
     for definition in HOST_CONFIG_CHECKS:
-        value = _read_path(config, definition.path)
+        path = definition.path
+        value = _read_path(config, path)
+        if definition.check_id == "local_agent_runner" and value is _MISSING:
+            legacy_path = ("provider_settings", "agent_runner_type")
+            legacy_value = _read_path(config, legacy_path)
+            if legacy_value is not _MISSING:
+                path = legacy_path
+                value = legacy_value
         if value is _MISSING:
             status = "unknown"
             unknown_count += 1
@@ -183,7 +190,7 @@ def evaluate_host_config(
         checks.append(
             {
                 "id": definition.check_id,
-                "path": ".".join(definition.path),
+                "path": ".".join(path),
                 "status": status,
                 "severity": definition.severity,
                 "observed": _observed(definition, value),
