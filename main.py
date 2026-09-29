@@ -34,6 +34,14 @@ from .domain import DomainError, normalize_scope
 from .heartbeat_domain import HEARTBEAT_TAG, is_owned_heartbeat_payload
 from .heartbeat_gate import HeartbeatWakeGate
 from .heartbeat_service import HeartbeatService
+from .listener_service import (
+    LISTENER_BACKUP_KEY,
+    LISTENER_EFFECT_CONTRACT,
+    LISTENER_STATE_KEY,
+    ListenerLimits,
+    ListenerService,
+    is_owned_listener_payload,
+)
 from .echo_service import (
     ECHO_EFFECT_CONTRACT,
     ECHO_TAG,
@@ -57,7 +65,7 @@ from .settings import PluginSettings
 from .storage import AstrBotKVStateStore
 
 PLUGIN_NAME = "astrbot_plugin_sender_activation"
-VERSION = "1.1.0-rc.19"
+VERSION = "1.2.0-rc.1"
 DECISION_EXTRA = "sender_activation_decision"
 RECOVERY_REPORT_EXTRA = "sender_activation_recovery_report"
 TURN_YIELD_EXTRA = "sender_activation_turn_yield"
@@ -71,6 +79,7 @@ _TOOL_EFFECT_CONTRACTS = {
     "manage_sender_activation": ACTIVATION_EFFECT_CONTRACT,
     "manage_sender_activation_rate": RATE_EFFECT_CONTRACT,
     "manage_heartbeat_lease": HEARTBEAT_EFFECT_CONTRACT,
+    "manage_active_listener": LISTENER_EFFECT_CONTRACT,
     "yield_current_turn": "contextual_no_visible_reply_for_plugin_proactive_turn",
     "manage_attention_ignore": IGNORE_EFFECT_CONTRACT,
     "manage_echo_hook": ECHO_EFFECT_CONTRACT,
@@ -179,6 +188,41 @@ _TOOL_ERROR_POLICIES: dict[str, tuple[str, str, bool]] = {
     "heartbeat_preflight_update_indeterminate": (
         "host_runtime",
         "query_heartbeat_then_retry",
+        False,
+    ),
+    "listener_scheduler_unavailable": (
+        "host_capability",
+        "enable_native_active_agent_scheduler",
+        False,
+    ),
+    "listener_service_inactive": (
+        "host_capability",
+        "inspect_listener_health",
+        False,
+    ),
+    "listener_storage_unavailable": (
+        "storage",
+        "inspect_listener_storage",
+        False,
+    ),
+    "listener_storage_write_failed": (
+        "storage",
+        "retry_after_listener_storage_recovery",
+        True,
+    ),
+    "listener_commit_indeterminate": (
+        "storage",
+        "reload_and_inspect_listener_state",
+        False,
+    ),
+    "listener_scope_capacity_exceeded": (
+        "capacity",
+        "cancel_unused_listeners_or_raise_limit",
+        False,
+    ),
+    "listener_total_capacity_exceeded": (
+        "capacity",
+        "cancel_unused_listeners_or_raise_limit",
         False,
     ),
     "yield_not_available": (
@@ -334,6 +378,37 @@ class AttentionGuardFilter(CustomFilter):
             return False
 
 
+class ActiveListenerFilter(CustomFilter):
+    """Low-cost event sensor. Matching only emits a signal; it never wakes the Agent directly."""
+
+    def filter(self, event: AstrMessageEvent, cfg: Any) -> bool:
+        try:
+            plugin = _ACTIVE_PLUGIN
+            if plugin is None or not plugin.listener_service.active:
+                return False
+            if event.get_platform_name() != "aiocqhttp" or event.is_private_chat():
+                return False
+            if event.is_at_or_wake_command:
+                return False
+            if event.get_extra(ATTENTION_IGNORED_EXTRA):
+                return False
+            sender_id = str(event.get_sender_id() or "").strip()
+            self_id = str(event.get_self_id() or "").strip()
+            if not sender_id or (self_id and sender_id == self_id):
+                return False
+            scope = event.unified_msg_origin
+            session_status = plugin.session_gate.read_sync(scope)
+            if session_status.enabled is False:
+                return False
+            return plugin.listener_service.has_match(
+                scope,
+                sender_id,
+                getattr(event, "message_str", ""),
+            )
+        except Exception:
+            return False
+
+
 class SenderActivationFilter(CustomFilter):
 
 
@@ -436,6 +511,16 @@ class SenderActivationPlugin(Star):
             AstrBotCronAdapter(context, active_execution_enabled=False),
             self.heartbeat_wake_gate,
         )
+        self.listener_service = ListenerService(
+            ListenerLimits(),
+            AstrBotKVStateStore(
+                self,
+                state_key=LISTENER_STATE_KEY,
+                backup_key=LISTENER_BACKUP_KEY,
+            ),
+            getattr(context, "cron_manager", None),
+            preflight=self._listener_preflight,
+        )
         self.activation_reservations = ActivationReservationCoordinator(
             self.settings.activation_min_interval_seconds,
             max_slots=self.settings.limits.max_targets_total,
@@ -462,6 +547,13 @@ class SenderActivationPlugin(Star):
         except DomainError as exc:
             logger.warning(
                 "[sender_activation] heartbeat_inert error=%s",
+                exc.code,
+            )
+        try:
+            await self.listener_service.initialize()
+        except DomainError as exc:
+            logger.warning(
+                "[sender_activation] listener_inert error=%s",
                 exc.code,
             )
         self._register_web_apis()
@@ -493,6 +585,12 @@ class SenderActivationPlugin(Star):
             logger.warning(
                 "[sender_activation] heartbeat_shutdown_failures count=%d",
                 len(heartbeat_failures),
+            )
+        listener_failures = await self.listener_service.terminate()
+        if listener_failures:
+            logger.warning(
+                "[sender_activation] listener_shutdown_failures count=%d",
+                len(listener_failures),
             )
         await self.attention_service.terminate()
         await self.service.terminate()
@@ -526,6 +624,12 @@ class SenderActivationPlugin(Star):
             "管理复用 AstrBot 原生 Cron 的有限期心跳租约",
         )
         self.context.register_web_api(
+            f"{API_PREFIX}/listener",
+            self._web_listener,
+            ["POST"],
+            "管理统一监听订单：条件、频率、延迟与无事件兜底",
+        )
+        self.context.register_web_api(
             f"{API_PREFIX}/access",
             self._web_access,
             ["POST"],
@@ -546,6 +650,7 @@ class SenderActivationPlugin(Star):
         access = self.access_service.snapshot()
         attention = self.attention_service.snapshot()
         echo = await self._safe_echo_snapshot()
+        listeners = await self.listener_service.snapshot()
         scope_map: dict[str, str] = {}
         for scope in [
             *state["known_scopes"],
@@ -553,6 +658,7 @@ class SenderActivationPlugin(Star):
             *access["known_scopes"],
             *attention["known_scopes"],
             *echo["raw_scopes"],
+            *listeners["raw_scopes"],
         ]:
             reference = self.service.scope_ref(scope)
             if reference in scope_map and scope_map[reference] != scope:
@@ -592,6 +698,12 @@ class SenderActivationPlugin(Star):
         return status.enabled is not False
 
     async def _heartbeat_preflight(self, scope: str) -> bool:
+        if self._terminated:
+            return False
+        status = await self._session_status(scope)
+        return status.enabled is not False
+
+    async def _listener_preflight(self, scope: str) -> bool:
         if self._terminated:
             return False
         status = await self._session_status(scope)
@@ -638,6 +750,7 @@ class SenderActivationPlugin(Star):
         )
         attention = self.attention_service.snapshot(scope=scope)
         echo = await self._safe_echo_snapshot(scope=scope)
+        listeners = await self.listener_service.snapshot(scope=scope)
         if scope is None:
             source = {
                 **source,
@@ -649,6 +762,7 @@ class SenderActivationPlugin(Star):
             heartbeat["heartbeat_leases"] = []
             attention["ignore_policies"] = []
             echo["echo_hooks"] = []
+            listeners["listeners"] = []
 
         def project(row: dict[str, Any]) -> dict[str, Any]:
             result = dict(row)
@@ -667,6 +781,8 @@ class SenderActivationPlugin(Star):
             "heartbeat_quarantined": heartbeat["quarantined"],
             "echo_hooks": echo["echo_hooks"],
             "echo_quarantined": echo["quarantined"],
+            "listeners": listeners["listeners"],
+            "listener_quarantined": listeners["quarantined"],
             "known_scopes": sorted(await self._page_scope_map()),
         }
 
@@ -677,7 +793,11 @@ class SenderActivationPlugin(Star):
         payload = event.get_extra("cron_payload")
         if not isinstance(payload, dict):
             return None
-        if is_owned_echo_payload(payload) or is_owned_heartbeat_payload(payload):
+        if (
+            is_owned_echo_payload(payload)
+            or is_owned_heartbeat_payload(payload)
+            or is_owned_listener_payload(payload)
+        ):
             return payload
         return None
 
@@ -737,6 +857,7 @@ class SenderActivationPlugin(Star):
             "manage_sender_activation",
             "manage_sender_activation_rate",
             "manage_heartbeat_lease",
+            "manage_active_listener",
             "manage_attention_ignore",
             "manage_echo_hook",
         )
@@ -792,6 +913,8 @@ class SenderActivationPlugin(Star):
         payload = event.get_extra("cron_payload")
         if isinstance(payload, dict) and is_owned_echo_payload(payload):
             return "echo"
+        if isinstance(payload, dict) and is_owned_listener_payload(payload):
+            return "listener"
         if event.get_extra(DECISION_EXTRA):
             return "sender_activation"
         if (
@@ -809,7 +932,7 @@ class SenderActivationPlugin(Star):
     def _echo_source_allowed(self, source: str) -> bool:
         if source == "native_wake":
             return self.settings.echo_allow_native_wake_source
-        if source == "sender_activation":
+        if source in {"sender_activation", "listener"}:
             return self.settings.echo_allow_sender_activation_source
         if source == "heartbeat":
             return self.settings.echo_allow_heartbeat_source
@@ -827,7 +950,7 @@ class SenderActivationPlugin(Star):
         blocked = report["blocked_operation_tools"]
         text = (
             "[插件授权事实] 当前发送者已由 AstrBot 管理员授予本群的插件操作员"
-            "权限。若其自然语言明确要求改变对象激活、限频或心跳状态，请结合"
+            "权限。若其自然语言明确要求改变监听、对象激活、限频或心跳状态，请结合"
             "完整语境调用相应正式工具；不需要其拥有 AstrBot 超级管理员权限。"
             "授权不等于强制调用，否定、引用、假设和纯讨论仍有否决权。"
         )
@@ -871,6 +994,25 @@ class SenderActivationPlugin(Star):
             logger.debug("[sender_activation] attention_guard_inert code=%s", exc.code)
         except Exception:
             logger.exception("[sender_activation] attention_guard_failed")
+
+    @filter.custom_filter(ActiveListenerFilter, priority=2500)
+    async def observe_active_listener_signal(self, event: AstrMessageEvent) -> None:
+        """Convert matching non-@ messages into normalized listener signals only."""
+        try:
+            if event.get_extra(ATTENTION_IGNORED_EXTRA):
+                return
+            await self.listener_service.observe_event(
+                scope=self._scope(event),
+                sender_id=self._sender(event),
+                message=getattr(event, "message_str", ""),
+            )
+        except DomainError as exc:
+            logger.debug(
+                "[sender_activation] listener_signal_inert code=%s",
+                exc.code,
+            )
+        except Exception:
+            logger.exception("[sender_activation] listener_signal_failed")
 
     @filter.custom_filter(SenderActivationFilter, priority=2000)
     async def activate_native_agent(self, event: AstrMessageEvent) -> None:
@@ -1049,6 +1191,8 @@ class SenderActivationPlugin(Star):
         payload = event.get_extra("cron_payload")
         if isinstance(payload, dict) and is_owned_echo_payload(payload):
             return "echo"
+        if isinstance(payload, dict) and is_owned_listener_payload(payload):
+            return "listener"
         if event.get_extra(DECISION_EXTRA):
             return "sender_activation"
         if (
@@ -1334,6 +1478,83 @@ class SenderActivationPlugin(Star):
                 tool,
             )
 
+    @filter.llm_tool(name="manage_active_listener")
+    async def manage_active_listener(
+        self,
+        event: AstrMessageEvent,
+        action: str = "",
+        listener_ids: list[str] | None = None,
+        condition_kind: str = "",
+        condition_values: list[str] | None = None,
+        frequency: str = "each",
+        frequency_count: int = 0,
+        response_speed: str = "normal_1s",
+        settle_delay_seconds: float = 0,
+        watchdog: str = "default_3m",
+        watchdog_seconds: float = 0,
+        lifetime: str = "2h",
+        lifetime_seconds: int = 0,
+        goal: str = "",
+    ) -> str:
+        """管理 AI 的统一监听订单。监听只产生信号，不直接回复；信号按订单自己的频率与消抖延迟归一化，之后同一群/控制主体只产生一次主 Agent 激活。start 建立监听，cancel 净化指定 listener_id，list 查询。
+
+        Args:
+            action(string): start、cancel 或 list。
+            listener_ids(list[string]): cancel 时填写 list 返回的 listener_id；list 可空。
+            condition_kind(string): 监听什么。sender=指定 QQ ID；keyword=任意消息包含关键词；any_message=当前群任意普通消息，配合频率可表达“再有 N 条消息”；time_only=不监听消息，只靠定时兜底自行醒来。
+            condition_values(list[string]): sender 填真实数字 QQ ID；keyword 填关键词；any_message/time_only 留空。
+            frequency(string): 带标注预设。each=每次命中；every_3=累计 3 次；every_10=累计 10 次；custom=使用 frequency_count。
+            frequency_count(number): 仅 frequency=custom 时填写自定义命中次数。
+            response_speed(string): 带标注预设。immediate_0s=立即；normal_1s=普通 1 秒；settle_3s=复杂连续场景等 3 秒；custom=使用 settle_delay_seconds。等待期间新的同类命中会重置倒计时，只保留最新状态。
+            settle_delay_seconds(number): 仅 response_speed=custom 时填写，0 至 30 秒。
+            watchdog(string): 无条件命中的活性兜底。default_3m=默认 3 分钟；ten_min=10 分钟；thirty_min=30 分钟；off=关闭；custom=使用 watchdog_seconds。兜底只保证再次判断，不保证发言。
+            watchdog_seconds(number): 仅 watchdog=custom 时填写。
+            lifetime(string): 有效期预设。10m、30m、2h、24h 或 custom。
+            lifetime_seconds(number): 仅 lifetime=custom 时填写，最长 7 天。
+            goal(string): 唯一主要填空项：未来醒来后要重新判断的开放目标。不要把固定回复写成 goal。
+        """
+        tool = "manage_active_listener"
+        try:
+            scope = self._scope(event)
+            actor = self._actor(event)
+            authorization_basis = self.access_service.authorize(
+                actor=actor,
+                scope=scope,
+                capability="activation",
+                action=action,
+            )
+            if str(action or "").strip().lower() == "start":
+                await self._require_new_state_allowed(scope)
+            result = await self.listener_service.manage(
+                scope=scope,
+                action=action,
+                owner_sender_id=actor.sender_id,
+                actor_ref=actor.actor_ref,
+                condition_kind=condition_kind,
+                condition_values=condition_values,
+                frequency=frequency,
+                frequency_count=frequency_count,
+                response_speed=response_speed,
+                settle_delay_seconds=settle_delay_seconds,
+                watchdog=watchdog,
+                watchdog_seconds=watchdog_seconds,
+                lifetime=lifetime,
+                lifetime_seconds=lifetime_seconds,
+                goal=goal,
+                listener_ids=listener_ids,
+            )
+            result["tool"] = tool
+            result["authorization_basis"] = authorization_basis
+            return _json(result)
+        except DomainError as exc:
+            return _tool_error(exc, tool)
+        except Exception as exc:
+            logger.exception("[sender_activation] listener_tool_failed")
+            return _tool_error(
+                DomainError("internal_error", f"工具执行失败: {type(exc).__name__}"),
+                tool,
+            )
+
     @filter.llm_tool(name="manage_heartbeat_lease")
     async def manage_heartbeat_lease(
         self,
@@ -1462,6 +1683,7 @@ class SenderActivationPlugin(Star):
                 **self.attention_service.health(),
                 **await self.heartbeat_service.health(),
                 **await self.echo_service.health(),
+                **await self.listener_service.health(),
                 **self.activation_reservations.health(),
                 "turn_yield_count": self._yield_count,
             }
@@ -1592,6 +1814,52 @@ class SenderActivationPlugin(Star):
             return error_response(exc.message, status_code=status, data=exc.as_dict())
         except Exception as exc:
             logger.exception("[sender_activation] heartbeat_web_failed")
+            return error_response(
+                f"内部错误: {type(exc).__name__}",
+                status_code=500,
+            )
+
+    async def _web_listener(self):
+        body = await request.json(default={})
+        if not isinstance(body, dict):
+            return error_response("请求体必须是 JSON 对象。", status_code=400)
+        try:
+            self._require_active_web()
+            scope = await self._resolve_page_scope(body.get("scope_ref"))
+            action = str(body.get("action") or "").strip().lower()
+            actor = self._dashboard_actor()
+            self.access_service.authorize(
+                actor=actor,
+                scope=scope,
+                capability="activation",
+                action=action,
+            )
+            if action == "start":
+                await self._require_new_state_allowed(scope)
+            result = await self.listener_service.manage(
+                scope=scope,
+                action=action,
+                owner_sender_id=body.get("owner_sender_id"),
+                actor_ref=actor.actor_ref,
+                condition_kind=body.get("condition_kind", ""),
+                condition_values=body.get("condition_values", []),
+                frequency=body.get("frequency", "each"),
+                frequency_count=body.get("frequency_count", 0),
+                response_speed=body.get("response_speed", "normal_1s"),
+                settle_delay_seconds=body.get("settle_delay_seconds", 0),
+                watchdog=body.get("watchdog", "default_3m"),
+                watchdog_seconds=body.get("watchdog_seconds", 0),
+                lifetime=body.get("lifetime", "2h"),
+                lifetime_seconds=body.get("lifetime_seconds", 0),
+                goal=body.get("goal", ""),
+                listener_ids=body.get("listener_ids", []),
+            )
+            return json_response(result)
+        except DomainError as exc:
+            status = 503 if exc.code.endswith("unavailable") else 400
+            return error_response(exc.message, status_code=status, data=exc.as_dict())
+        except Exception as exc:
+            logger.exception("[sender_activation] listener_web_failed")
             return error_response(
                 f"内部错误: {type(exc).__name__}",
                 status_code=500,
