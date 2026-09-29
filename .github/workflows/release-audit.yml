@@ -3,7 +3,7 @@ name: release audit
 on:
   workflow_dispatch:
   pull_request:
-    types: [ready_for_review, synchronize, reopened]
+    types: [opened, ready_for_review, synchronize, reopened]
 
 permissions:
   contents: read
