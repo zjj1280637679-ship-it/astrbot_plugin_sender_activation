@@ -324,6 +324,7 @@ def _tool_error(error: DomainError, tool: str) -> str:
         "attention_commit_indeterminate",
         "native_cron_update_indeterminate",
         "heartbeat_preflight_update_indeterminate",
+        "listener_commit_indeterminate",
     }
     return _json(
         {
@@ -781,7 +782,7 @@ class SenderActivationPlugin(Star):
             "heartbeat_quarantined": heartbeat["quarantined"],
             "echo_hooks": echo["echo_hooks"],
             "echo_quarantined": echo["quarantined"],
-            "listeners": listeners["listeners"],
+            "listeners": [project(row) for row in listeners["listeners"]],
             "listener_quarantined": listeners["quarantined"],
             "known_scopes": sorted(await self._page_scope_map()),
         }
@@ -1517,13 +1518,29 @@ class SenderActivationPlugin(Star):
         try:
             scope = self._scope(event)
             actor = self._actor(event)
-            authorization_basis = self.access_service.authorize(
-                actor=actor,
-                scope=scope,
-                capability="activation",
-                action=action,
-            )
-            if str(action or "").strip().lower() == "start":
+            action_name = str(action or "").strip().lower()
+            try:
+                authorization_basis = self.access_service.authorize(
+                    actor=actor,
+                    scope=scope,
+                    capability="activation",
+                    action=action_name,
+                )
+            except DomainError as auth_error:
+                if (
+                    auth_error.code == "operator_access_required"
+                    and actor.proactive_source == "listener"
+                    and action_name == "cancel"
+                    and self.listener_service.owns_all(
+                        scope=scope,
+                        owner_sender_id=actor.sender_id,
+                        listener_ids=listener_ids,
+                    )
+                ):
+                    authorization_basis = "listener_self_maintenance"
+                else:
+                    raise
+            if action_name == "start":
                 await self._require_new_state_allowed(scope)
             result = await self.listener_service.manage(
                 scope=scope,
@@ -1618,7 +1635,7 @@ class SenderActivationPlugin(Star):
         event: AstrMessageEvent,
         reason: str = "",
     ) -> str | None:
-        """仅在本插件对象激活、心跳或回响额外唤醒的当前 Agent 回合中，结构化结束本轮且不发送可见回复。沉默只约束公开输出，不等于禁止控制面工具：可先在前一个工具选择中设置有限忽略/清理状态，再在后续最终工具选择中把本工具作为唯一调用结束本轮。普通 @、原生会话或其他插件唤醒不可用。详细规则见 group-duty-orchestration Skill。
+        """仅在本插件对象激活、统一监听、心跳或回响额外唤醒的当前 Agent 回合中，结构化结束本轮且不发送可见回复。沉默只约束公开输出，不等于禁止控制面工具：可先在前一个工具选择中设置有限忽略/清理状态，再在后续最终工具选择中把本工具作为唯一调用结束本轮。普通 @、原生会话或其他插件唤醒不可用。详细规则见 group-duty-orchestration Skill。
 
         Args:
             reason(string): 可选的简短语境理由，不面向群聊显示。
