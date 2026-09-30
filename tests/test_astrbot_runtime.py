@@ -149,7 +149,7 @@ def make_cron(payload: dict[str, Any]) -> CronMessageEvent:
 
 
 def test_registration() -> None:
-    assert plugin_main.VERSION == "1.2.0-rc.2"
+    assert plugin_main.VERSION == "1.3.0-rc.1"
     expected = [
         "manage_sender_activation_access",
         "manage_sender_activation",
@@ -401,7 +401,7 @@ async def main() -> None:
     test_config_authority()
     await test_guard_modes()
     await test_echo_preflight_gate()
-    print("v1.2 rc2 AstrBot runtime integration counterexamples: PASS")
+    print("v1.3 rc1 AstrBot runtime integration counterexamples: PASS")
 
 
 if __name__ == "__main__":
