@@ -1,26 +1,30 @@
 <h1 align="center">管理员的真理捍卫器</h1>
-<p align="center"><strong>用这款 AstrBot 插件，让你的 AI 获得限时免@的主动回复能力：该反驳就反驳，该沉默就沉默。</strong></p>
-<p align="center"><strong>让你的 AI 为你战斗到底。</strong></p>
+<p align="center"><strong>给 AstrBot 主 Agent 一套可持续、可约束、可撤销的未来行动权。</strong></p>
+<p align="center"><strong>不是被事件叫醒才存在，而是在有限职责中按自己的节奏持续判断世界。</strong></p>
 
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26.1-6b63ff)](https://github.com/AstrBotDevs/AstrBot)
 [![Platform](https://img.shields.io/badge/platform-aiocqhttp-2f855a)](https://docs.astrbot.app/en/dev/star/plugin-new.html)
 
-> **让该被追问的发言得到反驳，让没有增量的接话归于沉默。**
+> **Agent 不由事件驱动存在，而由职责驱动持续存在；事件只改变它所处的世界。**
 
-从 `1.3.0-rc.1` 开始，项目把最高层定义进一步压成 **Public Self-Discipline Harness（公共自律 Harness）**：AttentionProgram 继续表示一件尚未完成的开放职责，但 Watch、Recheck 不再被理解成独立“主动功能”，而是统一产生 WakeIntent，由 Governor 把未来行动请求归一化成有限、single-flight 的 Agent Turn。
+从 `1.3.0-rc.1` 开始，项目的最高层定义是 **Public Self-Discipline Harness（公共自律 Harness）**。它不是替 AI 完成任务的工作流，而是给 AstrBot 主 Agent 提供未来行动权的基础设施：有限职责、内部节奏、外界筛选、单路归一化、主动沉默和可撤销退出。
 
 ## v1.3 公共自律 Harness
 
-初版实现与代码边界见 [公共自律 Harness：v1.3.0-rc.1 初版](docs/self_discipline_harness.md)。
+完整工程总纲见 [公共自律 Harness：工程总纲 vNext](docs/self_discipline_harness.md)。
 
-总模型只有三层：
+核心范式：
 
-- **Contract**：未来的我承担什么有限职责；当前第一种 Contract 仍是 AttentionProgram。
-- **Governor**：WakeIntent 如何去重、合并、标记 dirty，并约束同一 AttentionKey 的并发。
-- **Turn**：AstrBot 主 Agent 真正获得一次重新读取当前世界、Action / Yield / Done 的机会。
+- **职责驱动持续存在**：只要有限 Contract 仍然有效且未完成，就必须保留未来重新判断的可达性。
+- **内部节奏优先**：Recheck 提供内生持续性；AI 不需要等外界再次点名才“存在”。
+- **外界条件只做筛选输入**：Watch 只说明世界出现了相关变化，不直接命令 Agent 立刻行动。
+- **时间主权**：Settle 允许世界先稳定；运行期间的新变化只更新 tail/dirty，完成后重新走同一 trailing-settle 规则。
+- **一个我**：同一 AttentionKey 始终 single-flight，多种提醒最终只归一化成一个真正运行的 Turn。
+- **自由与策略分离**：Plugin 提供 Freedom Infrastructure，Skill 提供 Usage Policy，Agent 做情境判断。
+- **纵向自校正**：Trace 只留下时间戳、唤醒原因、Outcome 等客观轨迹，Skill 再引导 Agent 从时间序列发现自己的频率、重复和无效行为。
 
-`harness_core.py` 是纯 Python 内核，不导入 AstrBot、不使用 asyncio、不碰数据库；真实 AttentionProgram Runtime 已开始使用它处理 Watch 状态、WakeIntent、dirty generation 与 reconcile claim。rc2 的 Program 存储 Schema 保持不变。
+`harness_core.py` 是纯 Python 内核，不导入 AstrBot、不使用 asyncio、不碰数据库；真实 AttentionProgram Runtime 已开始使用它处理 Watch 状态、WakeIntent、dirty generation 与 reconcile claim。AttentionProgram v2 存储 Schema 保持不变。
 
 ## AttentionProgram / Reconcile Runtime
 
@@ -111,27 +115,25 @@ AstrBot 原生的 `@`、引用、唤醒词和命令可以可靠地唤醒主 Agen
 状态，就会产生“承诺与可达性错配”；模型被主动唤醒后若只能硬发一条文字，
 又会产生“看见却不能自然让出话轮”的错配。
 
-管理员的真理捍卫器只补充这些基础机制，不复制原生 Agent：
+管理员的真理捍卫器只补充未来行动权的基础设施，不复制原生 Agent。目标架构不再把 Sender/Heartbeat/Echo 视为长期平级能力，而是逐步归一化为：
 
 ```text
-M = A_native ∪ {P, I, H, L_i, N, E, Y}
+World / Time / Restart / Legacy Sources
+                 ↓
+             WakeIntent
+                 ↓
+      Public Self-Discipline Mechanisms
+                 ↓
+          single-lane Readiness
+                 ↓
+             ONE Turn
+                 ↓
+        Action / Yield / Done
+                 ↓
+       next cadence / Trace
 ```
 
-- `A_native`：AstrBot 原生 Agent、上下文、`@`、命令、主动回复与 Cron。
-- `P`：rc2 AttentionProgram Runtime；Goal + 多 Watch + Recheck + Lease，事件只 mark dirty，再按 AttentionKey single-flight reconcile。
-- `I`：当前 UMO 与指定 QQ ID 组成的有限期额外激活租约。
-- `H`：当前 UMO 上复用 AstrBot 原生 Cron 的有限期时序激活租约。
-- `L_i`：只约束 `I` 所产生额外激活的可选、有限期限频租约。
-- `N`：部署者授权后，由主 Agent 管理的对象级有限 Ignore 策略；对象、计数与时间窗口可叠加。
-- `E`：显式可选、有限、不可递归的 Echo 主动再激活 Hook。
-- `Y`：仅在 `P/I/H/E` 新增的主动回合中，由主 Agent 正式选择无可见回复。
-
-生命周期闭环为：
-
-```text
-P/I/H/E 激活 -> 原生主 Agent 看现场 -> 行动或 Y 让出
-        -> 达成目标、人工撤销或有限期到期 -> 回到 A_native
-```
+当前旧 Sender Activation、Heartbeat、Echo、Ignore、Rate、Access 仍保留兼容运行路径；它们是迁移来源，不代表最终抽象。
 
 职责严格分离：
 
