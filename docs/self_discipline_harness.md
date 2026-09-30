@@ -1,47 +1,391 @@
-# 公共自律 Harness：v1.3.0-rc.1 初版
+# 公共自律 Harness：工程总纲 vNext
 
-状态：初版实现候选。
+状态：**目标架构已冻结，v1.3.0-rc.1 仅实现其中第一阶段。**
 
-## 1. 主工程立意
+## 0. 一句话定义
 
-本插件的最高层定义不再是“主动监听插件”，而是：
+> **Agent 不由事件驱动存在，而由职责驱动持续存在；事件只改变它所处的世界。**
 
-> 建立在 AstrBot 主 Agent 之上的公共自律 Harness。
+本插件是建立在 AstrBot 主 Agent 之上的 **公共自律 Harness**。它不替 Agent 完成业务目标，而是为 Agent 提供可持续、可约束、可撤销的积极自由与消极自由，使一个有限职责能够跨回合继续存在，并按照自己的内部节奏重新获得判断机会。
 
-AstrBot 继续负责消息、历史、工具、Provider、Cron 与真正的 Agent 执行。Harness 不替 Agent 理解业务，也不建立第二套 Agent；它只治理：
+第二条总原则：
 
-- Agent 为未来自己留下什么有限职责；
-- 什么变化值得重新获得一个 Turn；
-- 多个唤醒请求如何合并；
-- 同一控制主体如何避免并发出多个“自己”；
-- 什么时候允许沉默、继续或结束职责；
-- 后续怎样插入 Budget、Audit 和更统一的 Authority。
+> **公共自律 AI 既不会因为世界沉默而永久消失，也不会因为世界喧闹而被每一个事件牵着走。**
 
-一句话边界：
+AstrBot 继续负责真正的 Agent、消息、历史、工具、Provider 与执行环境；Harness 只负责未来行动权的治理。
 
-> Harness 管未来行动权的治理；Agent 管醒来以后如何理解世界和做决定。
+---
 
-## 2. 三层模型
+## 1. 与普通 AI 的范式差异
+
+普通聊天 AI 的基本循环是：
+
+    外界调用
+       ↓
+    Agent 激活
+       ↓
+    回复
+       ↓
+    回合结束
+
+其隐含语义是：
+
+> 没有新的外界调用，就没有下一次“我”。
+
+公共自律 AI 改成：
+
+    有限 Contract 仍然存活
+           ↓
+      内部时间继续前进
+           │
+       ┌───┴───────────────┐
+       │                   │
+    内部节奏             外界变化
+       │                   │
+    Recheck              Adapter
+       │                   │
+       │                 Watch
+       │                   │
+       └─────────┬─────────┘
+                 ↓
+              Readiness
+                 ↓
+              Governor
+                 ↓
+              ONE Turn
+                 ↓
+        Action / Yield / Done
+                 ↓
+          下一次内部节奏
+
+因此外界事件不是“电源开关”，而只是世界事实。
+
+只要一个 Contract 仍然有效、未完成、未过期且未被更高层规则终止，系统必须保证：
+
+    Live Contract
+    ∧ not Done
+    ∧ not Expired
+            ↓
+      Eventually Reconcile
+
+这就是职责驱动的持续性。
+
+---
+
+## 2. Plugin、Skill、Agent、Trace 四层分工
+
+整个项目的责任边界冻结为：
+
+    Plugin = Freedom Infrastructure
+    Skill  = Usage Policy
+    Agent  = Situated Judgment
+    Trace  = Objective Feedback
+
+中文即：
+
+> **插件提供自由，Skill 提供方法，Agent 根据现实做判断，Trace 提供纵向客观反馈。**
+
+### 2.1 Plugin：自由基础设施
+
+插件负责“能不能”和“机制是否可靠”：
+
+- 能否保留一个有限的未来职责；
+- 能否在没有新消息时再次获得判断机会；
+- 能否等待世界安静后再处理；
+- 能否在运行期间吸收新变化而不产生第二个并发 Agent；
+- 能否主动沉默；
+- 能否修改或结束自己的职责；
+- 能否在预算、权限、生命周期边界内行动。
+
+插件保证的是机制正确性，不保证具体业务目标成功。
+
+### 2.2 Skill：自由的使用策略
+
+Skill 负责“该不该”和“如何组合”：
+
+- 什么任务值得建立持续职责；
+- Watch 应该关注什么；
+- Settle 应该多长；
+- Recheck 是否必要；
+- Lease 应该多长；
+- 什么情况下应该 Yield；
+- 什么情况下应该 Done；
+- 是否应收缩、扩展或结束当前 Contract；
+- 如何读取纵向 Trace 修正自己的行为。
+
+Skill 不能绕过 Runtime，也不能拥有额外执行权。
+
+### 2.3 Agent：情境判断
+
+Agent 每次真正获得 Turn 后，重新读取当前世界：
+
+    CurrentState
+    + Goal
+    + Wake Reasons
+    + Available Tools
+            ↓
+          Agent
+            ↓
+    Action / Yield / Keep / Done
+
+Trigger 永远不等于 Decision。
+
+### 2.4 Trace：客观纵向反馈
+
+Trace 不给 AI 打分，也不保存私有思维链。
+
+它只记录：
+
+    什么时候
+    为什么醒
+    做了什么类型的结果
+    下一次相关变化何时发生
+
+例如：
+
+    10:00 Recheck → Yield
+    10:03 Recheck → Yield
+    10:06 Recheck → Yield
+    10:09 Recheck → Yield
+
+是否意味着 Recheck 太频繁，由 Skill + Agent 判断，而不是 Runtime 硬编码。
+
+原则：
+
+> **自我修正不是让模型评价自己的思维，而是让模型重新观察过去行为留下的客观时间序列。**
+
+---
+
+## 3. 自由模型
+
+### 3.1 积极自由
+
+Agent 可以：
+
+    建立未来职责
+    关注未来变化
+    在世界沉默时主动回来
+    等待合适时机再判断
+    继续维持未完成 Goal
+    修改自己的有限 Contract
+    主动结束职责
+
+当前主要由：
+
+    AttentionProgram
+    Watch
+    Recheck
+    WakeIntent
+    Turn
+
+承载。
+
+### 3.2 消极自由
+
+Agent 可以：
+
+    Wake 后不回复
+    看到事件后不立即行动
+    世界仍在快速变化时继续等待
+    信息不足时保留判断
+    不机械执行上一次计划
+    Goal 完成时退出
+
+核心不变量：
+
+    Event ≠ Command
+    Watch ≠ Wake
+    Wake ≠ Reply
+    Observe ≠ Act
+    Think ≠ Speak
+
+### 3.3 Constitution：自由的外部边界
+
+自由不能无限扩张。
+
+宿主提供不可由 Agent 自行突破的硬边界：
+
+    Authority
+    Scope
+    Max Lease
+    Budget
+    Concurrency
+    Capacity
+    Audit
+
+因此：
+
+    Host Constitution
+            ↓
+       Self Contract
+            ↓
+     Runtime Mechanisms
+
+Agent 可以让自己的 Contract 更严格，但不能比 Constitution 更宽松。
+
+---
+
+## 4. 内生节奏与外生敏感性
+
+公共自律 AI 有两条正交通道。
+
+### 4.1 内生持续性
+
+回答：
+
+> 即使世界没有任何新变化，我什么时候仍应重新看一次？
 
     Contract
-    “未来的我承担什么有限职责”
-            │
-      世界变化 / 时间
-            │
-            ▼
-    Governor
-    “这些未来行动请求如何被约束和合并”
-            │
-            ▼
-    Turn
-    “AstrBot 主 Agent 获得一次重新判断机会”
-            │
-            ├─ Action
-            ├─ Yield
-            ├─ Keep
-            └─ Done
+       ↓
+    Recheck / Internal Cadence
+       ↓
+    Internal Ready
 
-当前第一种 Contract 继续使用 rc2 已有的 AttentionProgram：
+它提供 liveness。
+
+### 4.2 外生敏感性
+
+回答：
+
+> 世界发生了什么值得进入我的注意力状态？
+
+    World Event
+       ↓
+    Adapter
+       ↓
+    Match
+       ↓
+    Watch
+       ↓
+    Contract state changes
+
+它提供 agility。
+
+两者汇合：
+
+    Internal Cadence ─────┐
+                          │
+    Relevant World Change ├─→ Readiness → Governor → Turn
+                          │
+    Turn Completion ──────┘
+
+所以：
+
+> **Watch 负责筛选现实，Recheck 负责持续存在，Settle 负责选择处理时机，Governor 负责实际授予 Turn。**
+
+---
+
+## 5. 时间主权：Settle 的高阶形式
+
+Settle 不是简单 delay。
+
+它表达：
+
+> **世界值得注意，不代表现在就是适合形成判断的时刻。**
+
+同一 AttentionKey 必须遵循单路尾缘归一化：
+
+    Event*
+      ↓
+    trailing Settle
+      ↓
+    ONE Turn
+      ↓
+    Event* while running
+      ↓
+    trailing Settle
+      ↓
+    ONE Turn
+      ↓
+    ...
+
+运行期间的新事件不能创建第二个 Agent，只更新尾部状态。
+
+状态机：
+
+    IDLE
+      │ event
+      ▼
+    SETTLING
+      │ new event → restart quiet deadline
+      │ quiet N
+      ▼
+    RUNNING
+      │ new event → mark dirty + update tail
+      │ turn complete
+      ├─ no dirty → IDLE / cadence
+      └─ dirty    → SETTLING
+
+下一 Turn 的最早时间遵循：
+
+    next_due =
+    max(
+        turn_finished_at,
+        latest_relevant_event_at + settle_seconds
+    )
+
+如果 Turn 完成时世界已经安静超过 N 秒，则可立即进入下一次 reconcile；无需机械再等一遍 N 秒。
+
+这统一了：
+
+    延迟回复
+    消息洪峰压缩
+    trailing debounce
+    single-flight
+    running dirty
+    reconcile re-arm
+    最新事件锚点
+
+高阶行为由简单机制组合产生，不新增“延迟回复模式”。
+
+---
+
+## 6. 单路归一化与“一个我”
+
+核心原则：
+
+> **世界可以同时以很多方式提醒我，但在任意一个时间尺度里，真正醒来的始终只有一个“我”。**
+
+同一 AttentionKey：
+
+    多个 Program
+    多个 Watch
+    Recheck
+    Restart
+    Future adapters
+         │
+         ▼
+      WakeIntent*
+         │
+         ▼
+      Coalescing
+         │
+         ▼
+       ONE Turn
+
+运行中的新变化：
+
+    RUNNING
+       │
+       ├─ event A
+       ├─ event B
+       └─ event C
+              ↓
+        dirty + tail update
+              ↓
+       当前 Turn 完成
+              ↓
+       重新走 Settle
+              ↓
+          ONE Turn
+
+禁止同一主体通过不同主动来源复制多个并发“自己”。
+
+---
+
+## 7. Contract
+
+当前第一种 Contract 继续使用：
 
     AttentionProgram
     ├─ Goal
@@ -49,197 +393,499 @@ AstrBot 继续负责消息、历史、工具、Provider、Cron 与真正的 Agen
     ├─ Recheck
     └─ Lease
 
-不新增 SelfDisciplineProgram 等同义实体。
+它表示：
 
-## 3. v1.3 初版代码边界
+> 一个尚未完成、值得未来继续重新判断的有限职责。
 
-### 3.1 harness_core.py
+它不是：
 
-纯 Python 核心，不导入 AstrBot、不使用 asyncio、不读写数据库、不创建任务。
+    Workflow
+    Reminder script
+    Fixed future reply
+    Business state machine
 
-当前包含：
+不要因为业务不同新增：
 
-- EventEnvelope
-- WatchContract
-- AttentionProgram
-- WatchRuntime
-- ProgramRuntime
-- WakeIntent
-- GovernorDecision
-- GovernorTransition
-- ReconcileClaim
-- observe_watch()
-- due_watch_intent()
-- recheck_intent()
-- restart_intent()
-- govern_wake_intents()
-- claim_reconcile()
-- needs_reconcile()
+    YogaProgram
+    TrackingProgram
+    SupervisorProgram
+    GitHubProgram
+    AttendanceProgram
 
-纯状态流：
+只要现有简单机制的组合足以表达，复杂行为就应该由组合涌现。
+
+---
+
+## 8. Mechanism 与 Coordinator
+
+代码核心只允许两类角色。
+
+### 8.1 Mechanism
+
+一个模块只实现一种简单规律：
+
+    Input + Local State
+        ↓
+    New Local State + Local Result
+
+典型机制：
+
+    Match
+    Quantifier
+    Settle
+    Recheck
+    Lease
+    Admission
+    Budget
+    Suppression
+    Coalescing
+    SingleFlight
+    TraceAppend
+
+机制应尽量：
+
+    无 AstrBot
+    无数据库
+    无网络
+    无业务语义
+
+### 8.2 Coordinator
+
+Coordinator 只接线，不创造新的业务规则。
+
+理想形态：
+
+    Event / Time / TurnFact
+          ↓
+        Adapter
+          ↓
+       Mechanisms
+          ↓
+       Readiness
+          ↓
+       Governor
+          ↓
+       Turn Claim
+          ↓
+       AstrBot Agent
+
+Coordinator 越“笨”越好。
+
+---
+
+## 9. Adapter
+
+Adapter 负责把具体世界转成公共事实。
+
+当前 QQ Adapter 可以理解：
+
+    sender
+    keyword
+    any_message
+
+未来可以增加：
+
+    GitHub
+    File
+    Webhook
+    Tool status
+    Robot sensor
+
+但 Adapter 没有权直接启动 Agent。
+
+它只能产生：
 
     EventEnvelope
-      ↓
-    Adapter 判断 matched / event_ref
-      ↓
-    observe_watch
-      ↓
-    WatchRuntime
-      ↓
-    WakeIntent[]
-      ↓
-    govern_wake_intents
-      ↓
-    ProgramRuntime DIRTY
-      ↓
-    claim_reconcile
-      ↓
-    ReconcileClaim
+    MatchResult
+    WakeIntent
 
-重要边界：Harness core 不解释 sender、keyword、QQ、GitHub 或文件事件；具体 Match 属于 Adapter。
+最终主动权必须进入同一公共治理路径。
 
-### 3.2 attention_program_service.py
+---
 
-仍是 AstrBot 适配 / Runtime 层：
+## 10. WakeIntent
 
-- v2 Program KV；
-- rc1 Listener 迁移；
-- Event 去重缓存；
-- asyncio settle / recheck timer；
-- AttentionKey 调度；
-- AstrBot Cron active_agent；
-- Program Web/Tool 状态；
-- Host preflight。
+WakeIntent 只表达：
 
-它现在不再自己手写 Watch/dirty 状态突变，而是调用 harness_core.py reducer。
+> 某个 Contract 现在可能值得重新获得一次 Turn。
 
-### 3.3 旧模块
+它不是命令。
 
-初版暂不一次性重写：
+未来所有主动来源最终统一为：
 
-- sender activation
-- heartbeat
-- echo
-- ignore
-- access
-- activation reservation
+    Watch
+    Recheck
+    Restart
+    Legacy Heartbeat
+    Legacy Echo
+    Legacy Sender Activation
+    Future Adapter
+            ↓
+         WakeIntent
+            ↓
+         Governor
+            ↓
+           Turn
 
-这些仍按原路径工作。
+从此禁止新增绕过 Governor 直接启动主 Agent 的主动路径。
 
-后续目标是逐个变成：
+---
 
-    Legacy source
-          ↓
-    WakeIntent Adapter
-          ↓
+## 11. Governor
+
+Governor 是概念层，不应写成一个万能巨型类。
+
+它由简单机制共同构成：
+
     Governor
-          ↓
-    Turn
+    =
+    Admission
+    + Authority
+    + Budget
+    + Suppression
+    + Coalescing
+    + Concurrency
+    + Expiry
 
-只有完成统一入口以后，才删除它们内部重复的主动调度逻辑。
-
-## 4. 初版 Governor 的真实能力
-
-当前 Governor 只承担最小公共规则：
-
-1. 一批 WakeIntent 必须属于同一个 Contract。
-2. 多个 Watch/Recheck 原因合并成一个 dirty generation。
-3. event refs 去重并只保留最近的有限集合。
-4. Contract 已经 dirty 时，新 Intent 只做 coalesce。
-5. AttentionKey 正在运行时，新 Intent 只做 coalesce，不要求并发 Turn。
-6. claim_reconcile() 将当前 dirty generation 移入 processing。
-7. processing 期间再次 dirty，完成后 needs_reconcile() 仍为真，因此只再运行一次。
-
-当前决策枚举已经冻结：
+当前 v1.3.0-rc.1 实际只实现初步 wake normalization：
 
     ALLOW_NOW
     WAIT
     COALESCE
-    DENY
 
-v1.3 初版真正使用：
+DENY 已冻结为结果类型，但 Constitution / Budget / Admission 尚未统一迁入。
 
-- ALLOW_NOW
-- WAIT
-- COALESCE
+---
 
-DENY 预留给后续 Budget / Constitution / Admission；初版不伪装成已经实现。
+## 12. Temporal Trace 与自我修正
 
-## 5. 仍由现有层负责的自律能力
+未来 Audit/Trace 应保持极薄：
 
-当前代码中已经存在、但尚未统一进入新 Governor 的能力：
-
-    Authority       → AccessService
-    Scope           → SessionGate
-    Suppression     → AttentionIgnore
-    Rate            → legacy activation rate
-    Concurrency     → ActivationReservation + Program AttentionKey
-    Yield           → yield_current_turn
-    Expiry          → Program Lease / old lease systems
-
-因此 v1.3 的目标不是“今天把一切重写成 Governor”，而是先建立唯一可复用内核，再逐步迁移这些能力。
-
-## 6. 初版不变量
-
-自动测试应保护：
-
-    Event ≠ Command
-    Wake ≠ Reply
-    多 WakeIntent ≠ 多 Agent
-    同一个 reduction 不能跨 Contract
-    一个 AttentionKey 不并发两个 Program Turn
-    running 期间 dirty 不丢失
-    一个 Program 多 Watch 可以合并为一代 dirty
-    纯 core 不依赖 AstrBot
-    rc2 Program 存储格式不变
-    rc1 Listener 迁移仍有效
-
-## 7. 下一阶段顺序
-
-### Phase A：统一 WakeIntent
-
-把旧 Heartbeat、Echo、Sender Activation 逐个变成 WakeIntent producer，先不删兼容 Tool。
-
-### Phase B：Governor 强化
-
-按顺序加入：
-
-    Constitution
-    ├─ Authority ceiling
-    ├─ Scope ceiling
-    ├─ Max Lease
-    ├─ Global concurrency
-    └─ Budget
-
-AI 可以建立更严格 Contract，但不能突破 Constitution。
-
-### Phase C：Turn Receipt / Audit
-
-只记录控制面事实：
-
-    who
+    timestamp
     contract_id
+    generation
     wake_reason
     governor_decision
-    generation
-    turn_started
-    turn_finished
-    outcome
+    turn_outcome
+    action_ref(optional)
 
-不记录私有思维链，不复制完整群消息正文。
+不保存：
 
-### Phase D：删除重复 Runtime
+    私有思维链
+    完整消息正文
+    主观“好/坏”评分
 
-当旧主动来源都进入 Governor 后，再删除：
+Skill 可以纵向读取：
 
-- rc1 Listener Runtime；
-- 独立 Heartbeat/Echo 主动调度重复部分；
-- 可被 Governor 吸收的重复 reservation / rate glue。
+    最近多久醒过几次？
+    Watch / Recheck 比例？
+    Action / Yield / Done 比例？
+    是否连续 Action 而世界无变化？
+    是否长期只有 Recheck？
+    Settle 是否明显太短？
+    当前 Contract 是否仍合理？
 
-## 8. 当前判断
+然后由 Agent 自己：
 
-v1.3 初版有意只做一件事：
+    Keep
+    Modify
+    Shrink
+    Extend
+    Done
 
-> 把“公共自律 Harness”从项目口号变成一个可以脱离 AstrBot 单独测试的状态内核，并让真实 AttentionProgram 路径开始使用它。
+形成真正的自校正闭环：
 
-这使后续每次迁移都有统一目标，而不需要再增加新的平级主动机制。
+    Contract
+       ↓
+    Governor
+       ↓
+      Turn
+       ↓
+    Action/Yield
+       ↓
+      Trace
+       ↓
+    Reflection Skill
+       ↓
+    Agent Re-evaluation
+       ↓
+    Contract Update
+
+---
+
+## 13. 高级能力必须涌现
+
+工程原则：
+
+> **复杂能力 ≠ 复杂模块。**
+
+例如“长期监督群聊”不应该有 GroupSupervisor Runtime。
+
+它应由：
+
+    Goal
+    + Watch
+    + Quantifier
+    + Settle
+    + Recheck
+    + Lease
+    + Budget
+    + SingleFlight
+    + Trace
+    + Skill
+    + Agent Judgment
+
+共同产生。
+
+因此：
+
+> **代码只实现简单规律，不直接实现复杂行为；复杂行为由简单规律、环境、Skill 与 Agent 共同涌现。**
+
+---
+
+## 14. Plugin / Skill 判定规则
+
+任何新需求先问：
+
+### 是新的自由基础设施吗？
+
+例如：
+
+    “没有新消息也能重新回来”
+    → Recheck
+    → Plugin
+
+### 是已有自由的使用方法吗？
+
+例如：
+
+    “监督签到时 10 分钟没人报告就回来看看”
+    → Skill
+
+### 是现实数据的来源吗？
+
+例如：
+
+    “GitHub PR 状态变化”
+    → Adapter
+
+### 是 Agent 的语义判断吗？
+
+例如：
+
+    “这个 PR 变化是否值得提醒”
+    → Agent
+
+### 是客观历史事实吗？
+
+例如：
+
+    “过去一小时已经主动醒了 8 次”
+    → Trace
+
+只要现有机制组合能表达，就禁止新增专门 Runtime Mode。
+
+---
+
+## 15. 验收分层
+
+以后不能只用“场景有没有成功”判断插件正确性。
+
+必须拆成：
+
+    Mechanism Test
+        ↓
+    单一规律是否正确？
+
+    Composition Test
+        ↓
+    多机制组合是否仍保持不变量？
+
+    Host Integration Test
+        ↓
+    AstrBot 消息 / 历史 / Cron / Agent 是否可达？
+
+    Skill Evaluation
+        ↓
+    模型是否合理使用这些自由？
+
+    Task Evaluation
+        ↓
+    具体目标最终是否达成？
+
+例如：
+
+    三条消息启动三个并发 Agent
+    → Harness bug
+
+而：
+
+    AI 错误判断所有人已经签到
+    → Agent / Skill / World Visibility 问题
+
+两类失败不得混为一谈。
+
+---
+
+## 16. 当前代码映射
+
+v1.3.0-rc.1 已经完成的第一阶段：
+
+### harness_core.py
+
+纯 Python，不依赖 AstrBot / asyncio / DB / Cron。
+
+当前承载：
+
+    EventEnvelope
+    WatchContract
+    AttentionProgram
+    WatchRuntime
+    ProgramRuntime
+    WakeIntent
+    GovernorDecision
+    GovernorTransition
+    ReconcileClaim
+    observe_watch
+    due_watch_intent
+    govern_wake_intents
+    claim_reconcile
+    needs_reconcile
+
+### attention_program_service.py
+
+当前仍承担：
+
+    v2 Program KV
+    rc1 Listener migration
+    Event dedupe
+    timer
+    AttentionKey scheduler
+    AstrBot Cron active_agent
+    Web/Tool state
+    Host preflight
+
+它已经开始通过 harness_core 处理 Watch 状态、WakeIntent、dirty generation 与 reconcile claim，但尚未完成全部机制原子化。
+
+### 旧模块
+
+暂时仍独立存在：
+
+    sender activation
+    heartbeat
+    echo
+    ignore
+    access
+    activation reservation
+
+它们是迁移来源，不代表最终架构。
+
+---
+
+## 17. 下一阶段实施顺序
+
+### Phase A：修正时间语义
+
+把 running-dirty 的下一 Turn 从：
+
+    Turn 完成 → 立即 requeue
+
+升级为：
+
+    Turn 完成
+      ↓
+    若期间有新变化
+      ↓
+    重新进入同一 trailing Settle
+      ↓
+    quiet N
+      ↓
+    下一 Turn
+
+同时保留“如果世界早已安静够久，则立即运行”的语义。
+
+### Phase B：统一 WakeIntent
+
+依次把：
+
+    Heartbeat
+    Echo
+    Sender Activation
+
+降为 WakeIntent producer / compatibility adapter。
+
+### Phase C：统一 Governor
+
+把现有：
+
+    Access
+    Session Gate
+    Rate
+    Ignore
+    Activation Reservation
+
+逐步归入公共：
+
+    Authority
+    Scope
+    Budget
+    Suppression
+    Concurrency
+
+不要求物理上都进入同一个文件。
+
+### Phase D：加入极薄 Temporal Trace
+
+只记录控制面事实，为 Skill 的纵向反思提供客观材料。
+
+### Phase E：Skill 重构
+
+把业务策略、参数选择、纵向自校正原则继续移出 Runtime，写入 Skill。
+
+### Phase F：删除重复 Runtime
+
+只有在旧主动来源全部经过同一公共路径后，才删除 Heartbeat/Echo/Listener 等重复执行逻辑。
+
+---
+
+## 18. 最终工程不变量
+
+所有未来 PR 都必须服从：
+
+> **Agent 不由事件驱动存在，而由职责驱动持续存在。**
+
+> **外界事件只改变世界，不直接命令 Agent。**
+
+> **Live Contract 必须保有未来重新判断的可达性。**
+
+> **Agent 有自己的内部节奏，外界变化只能调整节奏，不能牵引出无限并发。**
+
+> **同一 AttentionKey 在任何时刻只允许一个真正运行的“我”。**
+
+> **运行期间的新变化必须回到同一 trailing Settle 规则，而不是直接生成第二个 Turn。**
+
+> **插件提供自由，不替 Agent 使用自由。**
+
+> **Skill 提供策略，不拥有 Runtime 权力。**
+
+> **Trace 提供事实，不替 Agent 给自己评分。**
+
+> **Agent 做语义判断，程序只执行确定性规律。**
+
+> **复杂能力必须由简单机制组合涌现。**
+
+> **能由现有机制组合表达的高级行为，禁止新增专门 Mode。**
+
+最终模型：
+
+    Freedom Infrastructure
+            ×
+       Usage Skills
+            ×
+     Situated Judgment
+            ×
+      World Observability
+            ×
+     Longitudinal Feedback
+            ↓
+      Emergent Capability
