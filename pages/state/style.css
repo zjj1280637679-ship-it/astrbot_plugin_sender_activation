@@ -317,24 +317,67 @@ button:disabled {
 }
 
 .heartbeat-form .full-width,
-.listener-form .full-width {
+.program-form .full-width {
   grid-column: 1 / -2;
 }
 
-.listener-primary {
+.program-primary {
   border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
 }
 
-.listener-table {
-  min-width: 1120px;
+.watch-editor {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 5px;
 }
 
-.listener-table td:first-child {
+.watch-editor-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.program-watches {
+  display: grid;
+  gap: 9px;
+}
+
+.watch-card {
+  display: grid;
+  grid-template-columns:
+    minmax(130px, 0.9fr)
+    minmax(190px, 1.5fr)
+    minmax(130px, 0.9fr)
+    minmax(150px, 1fr)
+    auto;
+  gap: 9px;
+  align-items: end;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.watch-remove {
+  display: flex;
+  align-items: flex-end;
+}
+
+.program-table {
+  min-width: 1160px;
+}
+
+.program-table td:first-child {
   font-family: "Cascadia Code", Consolas, monospace;
 }
 
-.listener-table td:nth-child(6) {
-  min-width: 320px;
+.program-table td:nth-child(2),
+.program-table td:nth-child(6) {
+  min-width: 280px;
   white-space: pre-wrap;
 }
 
@@ -560,6 +603,15 @@ tbody tr:last-child td {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .watch-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .watch-remove {
+    grid-column: 2;
+    justify-content: flex-end;
+  }
+
   .wide {
     grid-column: span 2;
   }
@@ -574,6 +626,23 @@ tbody tr:last-child td {
   .form-grid,
   .scope-grid {
     grid-template-columns: 1fr;
+  }
+
+  .watch-card {
+    grid-template-columns: 1fr;
+  }
+
+  .watch-remove {
+    grid-column: auto;
+    justify-content: stretch;
+  }
+
+  .watch-remove button {
+    width: 100%;
+  }
+
+  .watch-editor-heading {
+    flex-direction: column;
   }
 
   .status-strip > div + div {
