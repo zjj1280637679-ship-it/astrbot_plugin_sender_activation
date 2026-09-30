@@ -70,7 +70,7 @@ from .settings import PluginSettings
 from .storage import AstrBotKVStateStore
 
 PLUGIN_NAME = "astrbot_plugin_sender_activation"
-VERSION = "1.2.0-rc.2"
+VERSION = "1.3.0-rc.1"
 DECISION_EXTRA = "sender_activation_decision"
 RECOVERY_REPORT_EXTRA = "sender_activation_recovery_report"
 TURN_YIELD_EXTRA = "sender_activation_turn_yield"
