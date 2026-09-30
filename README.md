@@ -8,11 +8,23 @@
 
 > **让该被追问的发言得到反驳，让没有增量的接话归于沉默。**
 
-从 `1.2.0-rc.2` 开始，插件把“持续关注”压成一个更稳定的模型：**AttentionProgram 表示一件尚未完成的开放职责，Watch 只负责感知变化。** 用户发言、关键词、消息数量和定时 Recheck 都不会直接命令 AI 做动作，只会让 Program 变 dirty；Runtime 再按 `(scope, controller)` single-flight 唤醒一次 AstrBot 主 Agent，由它重新读取当前世界并判断行动、沉默或结束职责。
+从 `1.3.0-rc.1` 开始，项目把最高层定义进一步压成 **Public Self-Discipline Harness（公共自律 Harness）**：AttentionProgram 继续表示一件尚未完成的开放职责，但 Watch、Recheck 不再被理解成独立“主动功能”，而是统一产生 WakeIntent，由 Governor 把未来行动请求归一化成有限、single-flight 的 Agent Turn。
 
-## v1.2 AttentionProgram / Reconcile Runtime
+## v1.3 公共自律 Harness
 
-工程契约见 [AttentionProgram / Reconcile Runtime](docs/engineering_proposal.md)。
+初版实现与代码边界见 [公共自律 Harness：v1.3.0-rc.1 初版](docs/self_discipline_harness.md)。
+
+总模型只有三层：
+
+- **Contract**：未来的我承担什么有限职责；当前第一种 Contract 仍是 AttentionProgram。
+- **Governor**：WakeIntent 如何去重、合并、标记 dirty，并约束同一 AttentionKey 的并发。
+- **Turn**：AstrBot 主 Agent 真正获得一次重新读取当前世界、Action / Yield / Done 的机会。
+
+`harness_core.py` 是纯 Python 内核，不导入 AstrBot、不使用 asyncio、不碰数据库；真实 AttentionProgram Runtime 已开始使用它处理 Watch 状态、WakeIntent、dirty generation 与 reconcile claim。rc2 的 Program 存储 Schema 保持不变。
+
+## AttentionProgram / Reconcile Runtime
+
+详细 Program 工程契约继续见 [AttentionProgram / Reconcile Runtime](docs/engineering_proposal.md)。
 
 主入口是 `manage_attention_program`。AI 只需要理解六个高层句柄：
 
@@ -36,7 +48,7 @@
 
 ## Skills-like 两阶段适配
 
-`1.2.0-rc.2` 继续使用 AstrBot 的 `Skills-like（两阶段）` 工具模式：
+`1.3.0-rc.1` 继续使用 AstrBot 的 `Skills-like（两阶段）` 工具模式：
 
 - 第一阶段只需要看到工具的短名称和精简用途，不再常驻整段执行手册；
 - 第二阶段在模型选中工具后再提供参数 Schema；
@@ -46,10 +58,10 @@
 
 因此两阶段优化只改变**给模型展示说明的时机和密度**，不改变租约执行层。若人格明确配置为“不使用任何 Skills”，Tool 仍可按 AstrBot 的工具模式正常工作，只是不再获得按需加载的 Skill 操作手册。
 
-> **rc2 候选说明：** `1.2.0-rc.2` 将 rc1 Listener 提升为 AttentionProgram。
-> 多个 Watch 可以共同服务一个 Goal；Watch/Recheck 只负责 mark dirty，同一 AttentionKey
-> 保持 single-flight。Agent 运行中再次 dirty 时不并发，当前回合完成后再 reconcile 一次。
-> 旧 Listener KV 只有在 v2 状态真正不存在时才迁移，避免损坏 v2 时复活陈旧状态。
+> **v1.3 初版说明：** `1.3.0-rc.1` 不改变 AttentionProgram v2 数据格式，而是把
+> Contract/Watch runtime、WakeIntent、GovernorDecision、dirty generation 与 reconcile claim
+> 抽到可独立测试的 `harness_core.py`。旧 Heartbeat/Echo/Sender Activation 暂未一次性重写，
+> 后续将作为 WakeIntent Adapter 逐步接入同一 Governor。
 
 > **运行边界：** 首版运行域严格等于 `aiocqhttp` 群聊。其他平台和私聊事件
 > 保持原样；若主 Agent 在这些语境调用管理工具，插件返回结构化不支持错误，
