@@ -12,7 +12,7 @@
 
 ## v1.3 公共自律 Harness
 
-完整工程总纲见 [公共自律 Harness：工程总纲 vNext](docs/self_discipline_harness.md)。
+完整工程总纲见 [公共自律 Harness：工程总纲 vNext](docs/self_discipline_harness.md)。准备上真实 AstrBot/QQ 环境前，请按 [阶段进度与真实环境验收](docs/real_environment_candidate.md) 逐项测试。
 
 核心范式：
 
