@@ -1010,7 +1010,7 @@ class SenderActivationPlugin(Star):
         blocked = report["blocked_operation_tools"]
         text = (
             "[插件授权事实] 当前发送者已由 AstrBot 管理员授予本群的插件操作员"
-            "权限。若其自然语言明确要求改变监听、对象激活、限频或心跳状态，请结合"
+            "权限。若其自然语言明确要求改变 AttentionProgram、对象激活、限频或心跳状态，请结合"
             "完整语境调用相应正式工具；不需要其拥有 AstrBot 超级管理员权限。"
             "授权不等于强制调用，否定、引用、假设和纯讨论仍有否决权。"
         )
@@ -1066,13 +1066,18 @@ class SenderActivationPlugin(Star):
             message_obj = getattr(event, "message_obj", None)
             message_id = str(getattr(message_obj, "message_id", "") or "").strip()
             occurred_raw = getattr(message_obj, "timestamp", None)
+            observed_at = time.time()
             try:
                 occurred_at = float(occurred_raw) if occurred_raw is not None else None
             except (TypeError, ValueError, OverflowError):
                 occurred_at = None
             if not message_id:
+                # Prefer false-negative dedupe over suppressing a legitimate repeated
+                # message when the adapter failed to provide a stable event id.
+                # The object identity keeps duplicate handling of the same in-process
+                # event stable without pretending identical text is the same event.
                 material = (
-                    f"{scope}|{sender_id}|{occurred_at}|"
+                    f"{scope}|{sender_id}|{occurred_at}|{id(message_obj)}|"
                     f"{getattr(event, 'message_str', '')}"
                 )
                 message_id = hashlib.sha256(material.encode("utf-8")).hexdigest()
@@ -1082,7 +1087,7 @@ class SenderActivationPlugin(Star):
                 type="com.astrbot.qq.group.message",
                 subject=sender_id,
                 occurred_at=occurred_at,
-                observed_at=time.time(),
+                observed_at=observed_at,
                 payload_ref=message_id,
                 data={"message": getattr(event, "message_str", "")},
             )
