@@ -208,6 +208,40 @@ def test_event_refs_are_deduplicated_and_bounded() -> None:
     assert transition.runtime.event_refs == ("m3", "m4", "shared")
 
 
+def test_governor_rejects_cross_contract_batch() -> None:
+    try:
+        govern_wake_intents(
+            ProgramRuntime(),
+            [
+                recheck_intent(contract_id="p1", now=1.0),
+                recheck_intent(contract_id="p2", now=1.0),
+            ],
+            attention_key_running=False,
+        )
+    except ValueError as exc:
+        assert "one Contract" in str(exc)
+    else:
+        raise AssertionError("cross-contract WakeIntent batch was accepted")
+
+
+def test_zero_event_ref_budget_keeps_no_refs() -> None:
+    transition = govern_wake_intents(
+        ProgramRuntime(),
+        [
+            WakeIntent(
+                contract_id="p1",
+                reason="watch:a",
+                source="watch",
+                observed_at=1.0,
+                event_refs=("m1", "m2"),
+            )
+        ],
+        attention_key_running=False,
+        max_event_refs=0,
+    )
+    assert transition.runtime.event_refs == ()
+
+
 def test_empty_intent_batch_waits_without_mutation() -> None:
     runtime = ProgramRuntime(dirty_generation=7, reconciled_generation=7)
     transition = govern_wake_intents(
@@ -227,6 +261,8 @@ def main() -> None:
     test_already_dirty_or_running_is_coalesced()
     test_claim_then_new_dirty_requires_one_more_reconcile()
     test_event_refs_are_deduplicated_and_bounded()
+    test_governor_rejects_cross_contract_batch()
+    test_zero_event_ref_budget_keeps_no_refs()
     test_empty_intent_batch_waits_without_mutation()
     print("v1.3 harness core counterexamples: PASS")
 
