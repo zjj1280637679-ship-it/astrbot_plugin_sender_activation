@@ -1796,7 +1796,7 @@ class SenderActivationPlugin(Star):
         event: AstrMessageEvent,
         reason: str = "",
     ) -> str | None:
-        """仅在本插件对象激活、统一监听、心跳或回响额外唤醒的当前 Agent 回合中，结构化结束本轮且不发送可见回复。沉默只约束公开输出，不等于禁止控制面工具：可先在前一个工具选择中设置有限忽略/清理状态，再在后续最终工具选择中把本工具作为唯一调用结束本轮。普通 @、原生会话或其他插件唤醒不可用。详细规则见 group-duty-orchestration Skill。
+        """仅在本插件对象激活、AttentionProgram、心跳或回响额外唤醒的当前 Agent 回合中，结构化结束本轮且不发送可见回复。沉默只约束公开输出，不等于禁止控制面工具：可先在前一个工具选择中设置有限忽略/清理状态，再在后续最终工具选择中把本工具作为唯一调用结束本轮。普通 @、原生会话或其他插件唤醒不可用。详细规则见 group-duty-orchestration Skill。
 
         Args:
             reason(string): 可选的简短语境理由，不面向群聊显示。
@@ -1997,6 +1997,47 @@ class SenderActivationPlugin(Star):
                 status_code=500,
             )
 
+    async def _web_program(self):
+        body = await request.json(default={})
+        if not isinstance(body, dict):
+            return error_response("请求体必须是 JSON 对象。", status_code=400)
+        try:
+            self._require_active_web()
+            scope = await self._resolve_page_scope(body.get("scope_ref"))
+            action = str(body.get("action") or "").strip().lower()
+            actor = self._dashboard_actor()
+            self.access_service.authorize(
+                actor=actor,
+                scope=scope,
+                capability="activation",
+                action=action,
+            )
+            if action in {"create", "update"}:
+                await self._require_new_state_allowed(scope)
+            result = await self.program_service.manage(
+                scope=scope,
+                action=action,
+                controller_sender_id=body.get("controller_sender_id"),
+                actor_ref=actor.actor_ref,
+                program_ids=body.get("program_ids", []),
+                goal=body.get("goal", ""),
+                watches=body.get("watches", []),
+                recheck=body.get("recheck", "default_3m"),
+                recheck_seconds=body.get("recheck_seconds", 0),
+                lease=body.get("lease", "2h"),
+                lease_seconds=body.get("lease_seconds", 0),
+            )
+            return json_response(result)
+        except DomainError as exc:
+            status = 503 if exc.code.endswith("unavailable") else 400
+            return error_response(exc.message, status_code=status, data=exc.as_dict())
+        except Exception as exc:
+            logger.exception("[sender_activation] attention_program_web_failed")
+            return error_response(
+                f"内部错误: {type(exc).__name__}",
+                status_code=500,
+            )
+
     async def _web_listener(self):
         body = await request.json(default={})
         if not isinstance(body, dict):
@@ -2014,7 +2055,7 @@ class SenderActivationPlugin(Star):
             )
             if action == "start":
                 await self._require_new_state_allowed(scope)
-            result = await self.listener_service.manage(
+            result = await self.program_service.manage_legacy_listener(
                 scope=scope,
                 action=action,
                 owner_sender_id=body.get("owner_sender_id"),
@@ -2037,7 +2078,7 @@ class SenderActivationPlugin(Star):
             status = 503 if exc.code.endswith("unavailable") else 400
             return error_response(exc.message, status_code=status, data=exc.as_dict())
         except Exception as exc:
-            logger.exception("[sender_activation] listener_web_failed")
+            logger.exception("[sender_activation] listener_compat_web_failed")
             return error_response(
                 f"内部错误: {type(exc).__name__}",
                 status_code=500,
