@@ -738,16 +738,36 @@ class AttentionProgramService:
             return "invalid"
         return "absent"
 
-    async def _migrate_listener_v1(self) -> bool:
+    async def _migrate_listener_v1(self) -> str:
+        """Return migrated, absent, or invalid for the legacy migration source."""
         if self._legacy_store is None:
-            return False
+            return "absent"
         try:
             stored = await self._legacy_store.load()
-        except Exception:
-            return False
+        except Exception as exc:
+            self.last_error_code = f"legacy_listener_storage_load_failed:{type(exc).__name__}"
+            return "invalid"
+
+        if stored.primary_error or stored.backup_error:
+            errors = ",".join(
+                value
+                for value in (stored.primary_error, stored.backup_error)
+                if value
+            )
+            self.last_error_code = f"legacy_listener_slot_read_failed:{errors}"
+            self.loaded_from = "legacy_read_error"
+            return "invalid"
+
+        if stored.primary is None and stored.backup is None:
+            return "absent"
+
         now = self._now()
+        saw_document = False
         for source, document in (("legacy_primary", stored.primary), ("legacy_backup", stored.backup)):
-            if document is None or not isinstance(document, Mapping):
+            if document is None:
+                continue
+            saw_document = True
+            if not isinstance(document, Mapping):
                 continue
             if document.get("schema_version") != LISTENER_SCHEMA_VERSION:
                 continue
@@ -771,7 +791,7 @@ class AttentionProgramService:
                 )
             except Exception as exc:
                 self.last_error_code = f"program_migration_write_failed:{type(exc).__name__}"
-                return False
+                return "invalid"
             self._programs = migrated
             self._rebuild_index()
             self.quarantined = quarantined
@@ -780,8 +800,13 @@ class AttentionProgramService:
             self.loaded_from = source
             self.migrated_from_listener_v1 = True
             self.last_error_code = None
-            return True
-        return False
+            return "migrated"
+
+        if saw_document:
+            self.last_error_code = "legacy_listener_state_unrecognized"
+            self.loaded_from = "legacy_invalid"
+            return "invalid"
+        return "absent"
 
     async def _commit_programs(self, candidate: dict[str, AttentionProgram]) -> None:
         if not self.storage_ready:
@@ -829,8 +854,10 @@ class AttentionProgramService:
 
         load_status = await self._load_v2_state()
         if load_status == "absent":
-            migrated = await self._migrate_listener_v1()
-            if not migrated:
+            migration_status = await self._migrate_listener_v1()
+            if migration_status == "invalid":
+                return
+            if migration_status == "absent":
                 self._programs = {}
                 self._rebuild_index()
                 self.storage_ready = True
