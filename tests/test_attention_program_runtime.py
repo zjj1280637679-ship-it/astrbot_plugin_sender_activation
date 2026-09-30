@@ -233,6 +233,8 @@ async def test_multi_watch_one_program_one_dirty_generation() -> None:
     runtime = snap["programs"][0]["runtime"]
     assert runtime["dirty_generation"] == 1
     assert runtime["reconciled_generation"] == 1
+    health = await service.health()
+    assert health["harness_governor_allow_now_total"] >= 1
     await service.terminate()
 
 
@@ -343,6 +345,7 @@ async def test_dirty_while_running_requeues_once_without_concurrency() -> None:
     assert manager.run_payloads[1][PROGRAM_TAG]["generations"] == [2]
     health = await service.health()
     assert health["program_reconcile_requeues_total"] >= 1
+    assert health["harness_governor_coalesced_total"] >= 1
     await service.terminate()
 
 
