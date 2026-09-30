@@ -316,8 +316,30 @@ button:disabled {
   justify-content: flex-end;
 }
 
-.heartbeat-form .full-width {
+.heartbeat-form .full-width,
+.listener-form .full-width {
   grid-column: 1 / -2;
+}
+
+.listener-primary {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+}
+
+.listener-table {
+  min-width: 1120px;
+}
+
+.listener-table td:first-child {
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+
+.listener-table td:nth-child(6) {
+  min-width: 320px;
+  white-space: pre-wrap;
+}
+
+.legacy-section {
+  opacity: 0.96;
 }
 
 textarea {
