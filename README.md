@@ -14,7 +14,11 @@
 
 ## v1.2 统一监听 Runtime
 
-工程契约见 [统一监听—激活 Runtime：v1.2 工程契约](docs/engineering_proposal.md)。
+当前可运行候选仍是 `1.2.0-rc.1`。下一阶段工程目标已经替换为
+[Attention Program / Reconcile Runtime](docs/engineering_proposal.md)：
+不再继续堆叠 Condition，而是把一个开放职责提升为 `AttentionProgram`，
+由多个 `Watch` 共同把世界变化标记为 dirty，再按控制主体 single-flight
+唤醒主 Agent 对当前世界重新 reconcile。
 
 主入口是 `manage_active_listener`。AI 主要只需要选择：
 
