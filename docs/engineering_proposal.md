@@ -1,5 +1,9 @@
 # Attention Program / Reconcile Runtime：v1.2.0-rc.2 工程契约
 
+> v1.3.0-rc.1 起，本 Runtime 被定位为公共自律 Harness 的第一种 Contract 实现。
+> Harness 的 Contract / Governor / Turn 总纲与纯 core 边界见 [self_discipline_harness.md](self_discipline_harness.md)。
+> 本文继续保留 AttentionProgram 的具体工程契约与 v2 存储语义。
+
 状态：**rc2 已实现候选。** 当前运行时已经从“一 Listener 一职责”重构为 **AttentionProgram → Watch → Dirty/Reconcile**；旧 rc1 Listener 只保留迁移与兼容适配，不再运行第二套 Listener Runtime。
 
 ## 1. 已实现目标
