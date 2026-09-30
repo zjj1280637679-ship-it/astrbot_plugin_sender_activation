@@ -678,6 +678,18 @@ class AttentionProgramService:
             self.last_error_code = f"program_storage_load_failed:{type(exc).__name__}"
             return "invalid"
 
+        if stored.primary_error or stored.backup_error:
+            errors = ",".join(
+                value
+                for value in (stored.primary_error, stored.backup_error)
+                if value
+            )
+            self.last_error_code = f"program_storage_slot_read_failed:{errors}"
+            self.storage_ready = False
+            self.storage_write_healthy = False
+            self.loaded_from = "read_error"
+            return "invalid"
+
         if stored.primary is None and stored.backup is None:
             return "absent"
 
