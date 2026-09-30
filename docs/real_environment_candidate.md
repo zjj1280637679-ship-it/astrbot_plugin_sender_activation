@@ -77,7 +77,7 @@ reconciled
 
 ### Stage 4 — Temporal Trace v0：已实现
 
-每个活跃 Program 保留最多 64 条、进程内易失的控制面 Trace。
+每个活跃 Program 内部保留最多 64 条、进程内易失的控制面 Trace；Program list 只回传最近 16 条，并给出总数与是否截断。
 
 当前可能出现：
 
