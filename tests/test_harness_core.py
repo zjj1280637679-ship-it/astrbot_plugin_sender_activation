@@ -48,22 +48,22 @@ def test_watch_quantifier_and_settle_are_pure_reducers() -> None:
     )
     state = WatchRuntime()
 
-    state1, first = observe_watch(watch, state, event("e1"), now=10.0)
+    state1, first = observe_watch(watch, state, matched=True, event_ref="message:e1", now=10.0)
     assert first.matched is True
     assert first.candidate_created is False
     assert state.observed_since_reset == 0
     assert state1.observed_since_reset == 1
 
-    state2, second = observe_watch(watch, state1, event("e2"), now=11.0)
+    state2, second = observe_watch(watch, state1, matched=True, event_ref="message:e2", now=11.0)
     assert second.candidate_created is False
     assert state2.observed_since_reset == 2
 
-    state3, third = observe_watch(watch, state2, event("e3"), now=12.0)
+    state3, third = observe_watch(watch, state2, matched=True, event_ref="message:e3", now=12.0)
     assert third.candidate_created is True
     assert state3.pending is True
     assert state3.ready_at == 15.0
 
-    state4, fourth = observe_watch(watch, state3, event("e4"), now=13.0)
+    state4, fourth = observe_watch(watch, state3, matched=True, event_ref="message:e4", now=13.0)
     assert fourth.debounced is True
     assert state4.ready_at == 16.0
     assert state4.pending_match_count == 4
@@ -83,6 +83,15 @@ def test_watch_quantifier_and_settle_are_pure_reducers() -> None:
     assert intent is not None
     assert intent.reason == "watch:w1"
     assert intent.event_refs == ("message:e4",)
+    unchanged, ignored = observe_watch(
+        watch,
+        state4,
+        matched=False,
+        event_ref="message:ignored",
+        now=17.0,
+    )
+    assert ignored.matched is False
+    assert unchanged is state4
     assert reset_watch_runtime() == WatchRuntime()
 
 
