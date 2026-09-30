@@ -146,7 +146,7 @@ AttentionProgram 主动回合不是新的用户命令。
 
 ## 用客观时间轨迹检查自己的使用效果
 
-`manage_attention_program(action=list)` 会返回每个活跃 Program 的一个**有界、易失的控制面 Trace**。它只记录时间戳、world signal、WakeIntent、Turn 开始/完成/延期以及显式 Yield 等事实，不记录完整消息正文，也不记录私有思维链。
+`manage_attention_program(action=list)` 会返回每个活跃 Program 的**最近 Trace 尾部**（当前 16 条），同时给出内部保留总数；内部最多保留 64 条且进程重启会清空。它只记录时间戳、world signal、WakeIntent、Turn 开始/完成/延期以及显式 Yield 等事实，不记录完整消息正文，也不记录私有思维链。
 
 Trace 的用途不是让程序自动调参，也不是给自己打分，而是让你在需要时纵向观察：
 
