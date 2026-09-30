@@ -1666,7 +1666,10 @@ class AttentionProgramService:
                 await self._commit_programs(active)
                 self._program_runtime[program_id] = _ProgramRuntime()
                 self._retry_due.pop(program_id, None)
-                self._trace_by_program[program_id] = deque(maxlen=MAX_TRACE_ENTRIES_PER_PROGRAM)
+                if normalized_action == "create":
+                    self._trace_by_program[program_id] = deque(
+                        maxlen=MAX_TRACE_ENTRIES_PER_PROGRAM
+                    )
                 self._trace_locked(
                     program_id,
                     "contract_created" if normalized_action == "create" else "contract_updated",
