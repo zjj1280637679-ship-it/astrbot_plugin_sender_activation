@@ -665,17 +665,28 @@ class AttentionProgramService:
             "programs": [program.as_record() for program in rows],
         }
 
-    async def _load_v2_state(self) -> bool:
+    async def _load_v2_state(self) -> str:
+        """Return loaded, absent, or invalid.
+
+        Legacy v1 migration is allowed only when both v2 slots are truly absent.
+        If any v2 document exists but cannot be validated, fail inert rather than
+        resurrecting potentially stale v1 desired state.
+        """
         try:
             stored = await self._store.load()
         except Exception as exc:
             self.last_error_code = f"program_storage_load_failed:{type(exc).__name__}"
-            return False
+            return "invalid"
+
+        if stored.primary is None and stored.backup is None:
+            return "absent"
 
         now = self._now()
+        saw_document = False
         for source, document in (("primary", stored.primary), ("backup", stored.backup)):
             if document is None:
                 continue
+            saw_document = True
             try:
                 if not isinstance(document, Mapping):
                     raise DomainError("invalid_program_state_document", "Program 状态文档必须是对象。")
@@ -705,10 +716,15 @@ class AttentionProgramService:
                 self.storage_write_healthy = True
                 self.loaded_from = source
                 self.last_error_code = None
-                return True
+                return "loaded"
             except DomainError as exc:
                 self.last_error_code = exc.code
-        return False
+        if saw_document:
+            self.storage_ready = False
+            self.storage_write_healthy = False
+            self.loaded_from = "invalid_v2"
+            return "invalid"
+        return "absent"
 
     async def _migrate_listener_v1(self) -> bool:
         if self._legacy_store is None:
@@ -799,21 +815,18 @@ class AttentionProgramService:
         except DomainError:
             raise
 
-        loaded = await self._load_v2_state()
-        if not loaded:
+        load_status = await self._load_v2_state()
+        if load_status == "absent":
             migrated = await self._migrate_listener_v1()
             if not migrated:
-                try:
-                    stored = await self._store.load()
-                except Exception:
-                    stored = None
-                if stored is not None and stored.primary is None and stored.backup is None:
-                    self._programs = {}
-                    self._rebuild_index()
-                    self.storage_ready = True
-                    self.storage_write_healthy = True
-                    self.loaded_from = "empty"
-                    self.last_error_code = None
+                self._programs = {}
+                self._rebuild_index()
+                self.storage_ready = True
+                self.storage_write_healthy = True
+                self.loaded_from = "empty"
+                self.last_error_code = None
+        elif load_status == "invalid":
+            return
 
         if not self.storage_ready:
             return
@@ -1486,7 +1499,7 @@ class AttentionProgramService:
         if not self.storage_ready:
             raise DomainError("program_storage_unavailable", "注意力程序状态存储当前不可用。")
 
-        controller = normalize_target_id(controller_sender_id)
+        requested_controller = normalize_target_id(controller_sender_id)
         creator = _actor(actor_ref)
         normalized_goal = _goal(goal)
         recheck_value = _recheck(recheck, recheck_seconds, self.limits)
@@ -1501,9 +1514,11 @@ class AttentionProgramService:
             if existing is None or existing.scope != normalized_scope:
                 raise DomainError("program_absent", "program_id 不存在或不属于当前群。")
             program_id = existing.program_id
+            controller = existing.controller_sender_id
             created_at = existing.created_at
             created_by = existing.created_by
         else:
+            controller = requested_controller
             program_id = self._new_program_id(
                 scope=normalized_scope,
                 controller=controller,
