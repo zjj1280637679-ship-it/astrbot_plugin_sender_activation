@@ -463,6 +463,29 @@ def _legacy_listener_to_program(
     )
 
 
+def _watch_matches_event(
+    watch: WatchContract,
+    envelope: EventEnvelope,
+) -> bool:
+    """Current AstrBot/QQ Watch adapter.
+
+    The public Harness core treats match_kind as Contract data and does not
+    understand AstrBot-specific message types.
+    """
+    if envelope.type != "com.astrbot.qq.group.message":
+        return False
+    sender_id = str(envelope.subject or "").strip()
+    message = str(envelope.data.get("message") or "")
+    if watch.match_kind == "sender":
+        return sender_id in watch.match_values
+    if watch.match_kind == "keyword":
+        haystack = message.casefold()
+        return any(value.casefold() in haystack for value in watch.match_values)
+    if watch.match_kind == "any_message":
+        return True
+    return False
+
+
 def is_owned_program_payload(payload: Any) -> bool:
     if not isinstance(payload, Mapping):
         return False
@@ -1169,7 +1192,7 @@ class AttentionProgramService:
             now = self._now()
             return any(
                 program.expires_at > now
-                and any(watch.matches(envelope) for watch in program.watches)
+                and any(_watch_matches_event(watch, envelope) for watch in program.watches)
                 for program in self._by_scope.get(normalized_scope, ())
             )
         except Exception:
@@ -1200,7 +1223,8 @@ class AttentionProgramService:
                     next_runtime, observation = observe_watch(
                         watch,
                         runtime,
-                        envelope,
+                        matched=_watch_matches_event(watch, envelope),
+                        event_ref=envelope.ref(),
                         now=now,
                     )
                     if not observation.matched:
