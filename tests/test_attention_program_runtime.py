@@ -44,6 +44,16 @@ class MemoryStore:
         self.primary = dict(candidate_document)
 
 
+class ReadErrorStore(MemoryStore):
+    async def load(self) -> StoredDocuments:
+        return StoredDocuments(
+            None,
+            None,
+            primary_error="SimulatedReadError",
+            backup_error=None,
+        )
+
+
 @dataclass
 class FakeJob:
     job_id: str
@@ -494,6 +504,41 @@ async def test_corrupt_v2_never_resurrects_stale_v1() -> None:
     assert manager.run_payloads == []
 
 
+async def test_v2_read_error_never_looks_like_absent_state() -> None:
+    now = time.monotonic()
+    legacy = MemoryStore(
+        primary={
+            "schema_version": 1,
+            "listeners": [
+                {
+                    "listener_id": "must-not-migrate",
+                    "scope": SCOPE,
+                    "owner_sender_id": OWNER,
+                    "condition_kind": "sender",
+                    "condition_values": [TARGET],
+                    "frequency_count": 1,
+                    "settle_delay_seconds": 0,
+                    "watchdog_seconds": None,
+                    "goal": "读取失败时不能复活",
+                    "created_at": now - 1,
+                    "expires_at": now + 20,
+                    "created_by": "agent:test",
+                }
+            ],
+        }
+    )
+    service, _, manager = await new_service(
+        store=ReadErrorStore(),
+        legacy_store=legacy,
+    )
+    assert service.storage_ready is False
+    assert service.active is False
+    assert service.loaded_from == "read_error"
+    assert service.last_error_code.startswith("program_storage_slot_read_failed:")
+    assert (await service.snapshot(scope=SCOPE))["programs"] == []
+    assert manager.run_payloads == []
+
+
 async def test_update_preserves_controller_and_replaces_desired_watches() -> None:
     service, _, _ = await new_service()
     program_id = await create_program(service, watches=[sender_watch()])
@@ -534,6 +579,7 @@ async def main() -> None:
     await test_restart_marks_current_state_dirty_once()
     await test_listener_v1_migration_preserves_ids()
     await test_corrupt_v2_never_resurrects_stale_v1()
+    await test_v2_read_error_never_looks_like_absent_state()
     await test_update_preserves_controller_and_replaces_desired_watches()
     print("v1.2 rc2 attention program counterexamples: PASS")
 
