@@ -745,10 +745,16 @@ function render(payload) {
   currentPayload = payload;
   const health = payload.health;
   elements.versionLine.textContent = `v${payload.version}`;
-  if (!health.runtime_snapshot_ready) {
+  if (
+    !health.runtime_snapshot_ready ||
+    health.program_storage_ready === false
+  ) {
     elements.storage.textContent = t("unavailable", "不可用");
     elements.storage.style.color = "var(--danger)";
-  } else if (!health.storage_write_healthy) {
+  } else if (
+    !health.storage_write_healthy ||
+    health.program_storage_write_healthy === false
+  ) {
     elements.storage.textContent = t("writeDegraded", "快照可用，写入异常");
     elements.storage.style.color = "var(--danger)";
   } else {
@@ -762,7 +768,8 @@ function render(payload) {
   elements.accessCount.textContent = String(health.access_grant_count || 0);
   elements.quarantine.textContent = String(
     (health.quarantined_count || 0) +
-      (health.heartbeat_quarantined_count || 0),
+      (health.heartbeat_quarantined_count || 0) +
+      (health.program_quarantined_count || 0),
   );
   renderHostConfig(payload);
   renderToolPermissions(payload);
