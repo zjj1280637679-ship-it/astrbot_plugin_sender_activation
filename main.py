@@ -42,7 +42,6 @@ from .attention_program_service import (
     PROGRAM_BACKUP_KEY,
     PROGRAM_EFFECT_CONTRACT,
     PROGRAM_STATE_KEY,
-    PROGRAM_TAG,
     EventEnvelope,
     ProgramLimits,
     AttentionProgramService,
