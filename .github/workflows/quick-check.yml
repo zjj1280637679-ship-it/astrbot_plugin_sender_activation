@@ -20,7 +20,7 @@ jobs:
           python --version
           python -m py_compile \
             attention_domain.py attention_service.py echo_service.py \
-            heartbeat_domain.py heartbeat_gate.py cron_adapter.py listener_service.py \
+            heartbeat_domain.py heartbeat_gate.py cron_adapter.py host_diagnostics.py listener_service.py \
             attention_program_service.py harness_core.py
           python -m json.tool _conf_schema.json >/dev/null
           node --check pages/state/app.js
