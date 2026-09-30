@@ -273,16 +273,25 @@ def govern_wake_intents(
             generation=None,
         )
 
+    contract_ids = {intent.contract_id for intent in accepted}
+    if len(contract_ids) != 1:
+        raise ValueError("one Governor reduction may only contain one Contract")
+
     reasons = list(runtime.pending_reasons)
     refs = list(runtime.event_refs)
     for intent in accepted:
         if intent.reason and intent.reason not in reasons:
             reasons.append(intent.reason)
         for ref in intent.event_refs:
-            if ref and ref not in refs:
-                refs.append(ref)
+            if not ref:
+                continue
+            if ref in refs:
+                refs.remove(ref)
+            refs.append(ref)
 
-    if max_event_refs >= 0 and len(refs) > max_event_refs:
+    if max_event_refs == 0:
+        refs = []
+    elif max_event_refs > 0 and len(refs) > max_event_refs:
         refs = refs[-max_event_refs:]
 
     was_dirty = runtime.dirty
