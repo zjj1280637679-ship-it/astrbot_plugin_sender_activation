@@ -1592,6 +1592,7 @@ class AttentionProgramService:
                         self._program_runtime.pop(program.program_id, None)
                         self._recheck_due.pop(program.program_id, None)
                         self._retry_due.pop(program.program_id, None)
+                        self._trace_by_program.pop(program.program_id, None)
                         for watch in program.watches:
                             self._watch_runtime.pop((program.program_id, watch.watch_id), None)
                     for key in affected_keys:
@@ -1687,6 +1688,12 @@ class AttentionProgramService:
             # observed under the new spec and then erased by runtime reset".
             async with self._runtime_lock:
                 await self._commit_programs(active)
+                live_ids = set(active)
+                for stale_id in [
+                    value for value in self._trace_by_program if value not in live_ids
+                ]:
+                    self._trace_by_program.pop(stale_id, None)
+                    self._retry_due.pop(stale_id, None)
                 self._program_runtime[program_id] = _ProgramRuntime()
                 self._retry_due.pop(program_id, None)
                 if normalized_action == "create":
