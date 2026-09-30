@@ -571,7 +571,7 @@ DENY 已冻结为结果类型，但 Constitution / Budget / Admission 尚未统�
 
 ## 12. Temporal Trace 与自我修正
 
-当前已经实现一个 **Trace v0**：每个活跃 Program 最多保留 64 条、进程内易失的控制面事实，可由 `manage_attention_program(action=list)` 读取。
+当前已经实现一个 **Trace v0**：每个活跃 Program 最多保留 64 条、进程内易失的控制面事实；`manage_attention_program(action=list)` 默认只暴露最近 16 条，并同时返回 `trace_total / trace_truncated`，避免反馈机制膨胀上下文。
 
 当前记录：
 
