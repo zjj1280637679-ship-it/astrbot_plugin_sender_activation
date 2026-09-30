@@ -14,6 +14,8 @@ on:
       - heartbeat_gate.py
       - heartbeat_service.py
       - cron_adapter.py
+      - listener_service.py
+      - tests/test_listener_runtime.py
       - tests/test_heartbeat_truth.py
       - tests/test_astrbot_runtime.py
       - .github/workflows/integration-check.yml
@@ -49,9 +51,10 @@ jobs:
         run: |
           python tests/test_heartbeat_truth.py
           python tests/test_astrbot_runtime.py
+          python tests/test_listener_runtime.py
 
       - name: Candidate consistency
         run: |
-          python -m py_compile main.py settings.py attention_domain.py attention_service.py echo_service.py
+          python -m py_compile main.py settings.py attention_domain.py attention_service.py echo_service.py listener_service.py
           python -m json.tool _conf_schema.json >/dev/null
           git diff --check
