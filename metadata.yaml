@@ -1,8 +1,8 @@
 name: astrbot_plugin_sender_activation
 display_name: "管理员的真理捍卫器"
-desc: "给 AstrBot 主 AI 增加跨回合的主动注意力：按用户、关键词、消息数量或时间兜底建立有限监听，先归一化信号，再由主 Agent 统一判断、行动或沉默。"
-short_desc: "让 AstrBot AI 自己保持注意、按条件醒来，并在无事件时定时自检"
-version: "1.2.0-rc.1"
+desc: "给 AstrBot 主 AI 增加跨回合主动注意力：以 AttentionProgram 保存开放目标，由多个 Watch 把世界变化标记为 dirty，统一 single-flight 唤醒主 Agent 对当前世界重新判断。"
+short_desc: "让 AstrBot AI 管理自己的注意力：Watch 世界，按需 Reconcile"
+version: "1.2.0-rc.2"
 astrbot_version: ">=4.26.1"
 author: "羊膜大人"
 repo: "https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation"
