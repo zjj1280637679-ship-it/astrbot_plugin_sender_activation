@@ -1499,7 +1499,6 @@ class AttentionProgramService:
         if not self.storage_ready:
             raise DomainError("program_storage_unavailable", "注意力程序状态存储当前不可用。")
 
-        requested_controller = normalize_target_id(controller_sender_id)
         creator = _actor(actor_ref)
         normalized_goal = _goal(goal)
         recheck_value = _recheck(recheck, recheck_seconds, self.limits)
@@ -1518,7 +1517,7 @@ class AttentionProgramService:
             created_at = existing.created_at
             created_by = existing.created_by
         else:
-            controller = requested_controller
+            controller = normalize_target_id(controller_sender_id)
             program_id = self._new_program_id(
                 scope=normalized_scope,
                 controller=controller,
