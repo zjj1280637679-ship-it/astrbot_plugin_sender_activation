@@ -8,28 +8,22 @@
 
 > **让该被追问的发言得到反驳，让没有增量的接话归于沉默。**
 
-从 `1.2.0-rc.1` 开始，插件把“追踪用户”和“定时心跳”进一步抽象成统一监听：主 AI 可以把自己视为 AstrBot 群聊里的连续实体，为开放目标留下有限的未来注意力。用户、关键词、消息数量或纯时间兜底都只产生**激活信号**；信号先按频率和延迟归一化，再统一唤醒一次主 Agent。AI 醒来后重新读取现场，决定行动、沉默、继续监听或净化，而不是机械执行旧回复。
+从 `1.2.0-rc.2` 开始，插件把“持续关注”压成一个更稳定的模型：**AttentionProgram 表示一件尚未完成的开放职责，Watch 只负责感知变化。** 用户发言、关键词、消息数量和定时 Recheck 都不会直接命令 AI 做动作，只会让 Program 变 dirty；Runtime 再按 `(scope, controller)` single-flight 唤醒一次 AstrBot 主 Agent，由它重新读取当前世界并判断行动、沉默或结束职责。
 
-默认监听会在条件命中时按普通 1 秒消抖；即使一直没有条件命中，也会在 3 分钟后给 AI 一次重新检查机会。两者均可选择预设、调整或关闭。
+## v1.2 AttentionProgram / Reconcile Runtime
 
-## v1.2 统一监听 Runtime
+工程契约见 [AttentionProgram / Reconcile Runtime](docs/engineering_proposal.md)。
 
-当前可运行候选仍是 `1.2.0-rc.1`。下一阶段工程目标已经替换为
-[Attention Program / Reconcile Runtime](docs/engineering_proposal.md)：
-不再继续堆叠 Condition，而是把一个开放职责提升为 `AttentionProgram`，
-由多个 `Watch` 共同把世界变化标记为 dirty，再按控制主体 single-flight
-唤醒主 Agent 对当前世界重新 reconcile。
+主入口是 `manage_attention_program`。AI 只需要理解六个高层句柄：
 
-主入口是 `manage_active_listener`。AI 主要只需要选择：
+- **Goal**：每次醒来后重新判断什么开放目标；
+- **Watch**：什么变化值得重新看，同一 Program 可配置多个；
+- **Quantifier**：每次、每 3 次、每 10 次或自定义；
+- **Settle**：立即、安静 1 秒、安静 3 秒或自定义；
+- **Recheck**：即使没事件，3/10/30 分钟后是否也重新检查；
+- **Lease**：这项职责最多持续多久。
 
-- **监听条件**：指定用户、关键词、任意消息，或仅按时间自检；
-- **频率**：每次、每 3 次、每 10 次或自定义；
-- **响应速度**：立即、普通 1 秒、稳定 3 秒或自定义；
-- **无事件兜底**：默认 3 分钟、10 分钟、30 分钟、关闭或自定义；
-- **有效期**：10 分钟、30 分钟、2 小时、24 小时或自定义；
-- **开放目标**：未来醒来后重新判断什么。
-
-复杂底层留在 Runtime；Skill 主要告诉 AI “什么时候值得建立监听”，不要求模型学习 debounce、竞态锁或调度实现。
+复杂度沉到底层：EventEnvelope 去重、dirty generation、AttentionKey、single-flight、restart reconcile 都不需要 AI 填。旧 `manage_active_listener` 继续兼容，一个旧 Listener 会映射成一个 Program + 单 Watch；旧 `time_only` 映射成无 Watch + Recheck。
 
 ## 你可能在找
 
@@ -42,7 +36,7 @@
 
 ## Skills-like 两阶段适配
 
-`1.2.0-rc.1` 继续使用 AstrBot 的 `Skills-like（两阶段）` 工具模式：
+`1.2.0-rc.2` 继续使用 AstrBot 的 `Skills-like（两阶段）` 工具模式：
 
 - 第一阶段只需要看到工具的短名称和精简用途，不再常驻整段执行手册；
 - 第二阶段在模型选中工具后再提供参数 Schema；
@@ -52,10 +46,10 @@
 
 因此两阶段优化只改变**给模型展示说明的时机和密度**，不改变租约执行层。若人格明确配置为“不使用任何 Skills”，Tool 仍可按 AstrBot 的工具模式正常工作，只是不再获得按需加载的 Skill 操作手册。
 
-> **v1.2 候选说明：** `1.2.0-rc.1` 在 rc19 注意力机制上新增统一 Listener Runtime。
-> sender / keyword / any_message / time_only 条件统一产生 signal；frequency、debounce、watchdog 和
-> lifetime 彼此正交。watchdog 与消息触发一样必须经过本订单自己的 settle delay，不能绕过归一化层。
-> 旧对象激活、Heartbeat、Ignore、Echo 继续兼容，不强迫已有配置迁移。
+> **rc2 候选说明：** `1.2.0-rc.2` 将 rc1 Listener 提升为 AttentionProgram。
+> 多个 Watch 可以共同服务一个 Goal；Watch/Recheck 只负责 mark dirty，同一 AttentionKey
+> 保持 single-flight。Agent 运行中再次 dirty 时不并发，当前回合完成后再 reconcile 一次。
+> 旧 Listener KV 只有在 v2 状态真正不存在时才迁移，避免损坏 v2 时复活陈旧状态。
 
 > **运行边界：** 首版运行域严格等于 `aiocqhttp` 群聊。其他平台和私聊事件
 > 保持原样；若主 Agent 在这些语境调用管理工具，插件返回结构化不支持错误，
@@ -202,7 +196,7 @@ AstrBot 原生机制发生的私聊 Agent 请求中检测当前 UMO 的生效配
 
 1. 打开“插件管理”。
 2. 使用仓库 URL 安装，或上传经验证的精简运行 ZIP。
-3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.2.0-rc.1`。
+3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.2.0-rc.2`。
 4. 在插件配置中检查对象激活、心跳、容量和限频上限。
 5. 打开插件详情中的“管理员的真理捍卫器控制台”页面，确认 `storage_ready` 为 `true`。
 
@@ -237,20 +231,29 @@ https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation
 
 ## 工具
 
-### `manage_active_listener`（v1.2 推荐入口）
+### `manage_attention_program`（rc2 推荐入口）
 
 ```text
-action: start | cancel | list
-condition_kind: sender | keyword | any_message | time_only
-condition_values: sender 的 QQ ID 或 keyword 的关键词
-frequency: each | every_3 | every_10 | custom
-response_speed: immediate_0s | normal_1s | settle_3s | custom
-watchdog: default_3m | ten_min | thirty_min | off | custom
-lifetime: 10m | 30m | 2h | 24h | custom
-goal: 醒来后重新判断的开放目标
+action: create | update | cancel | list
+program_ids: update/cancel 时使用
+
+goal: 每次醒来后重新判断的开放目标
+
+watches:
+  - match.type: sender | keyword | any_message
+    match.values: [...]
+    quantifier: each | every_3 | every_10 | custom
+    settle: immediate_0s | normal_1s | settle_3s | custom
+
+recheck: default_3m | ten_min | thirty_min | off | custom
+lease: 10m | 30m | 2h | 24h | custom
 ```
 
-这是一般性跨回合主动注意力的推荐入口。消息条件只产生信号；连续信号按订单自己的 delay 消抖，同一控制主体多个 READY 再合并为一次 Agent 激活。默认 `watchdog=default_3m`，因此“没有新事件”也不会让开放目标永久沉睡。目标完成时按 `listener_id` 精确 cancel；未及时 cancel 只可能多一次重新判断，不意味着必须发言。
+事件只是“可能值得重新计算”的提示。多个 Watch 命中只让 Program dirty；同一控制主体多个 Program 也由 AttentionKey 归一化成 single-flight Agent 回合。目标完成时按 `program_id` cancel；无公开价值时可 `yield_current_turn`。
+
+### `manage_active_listener`（rc1 兼容）
+
+旧参数保持可调用，但底层不再运行独立 Listener Runtime：一个旧 Listener 会写成一个 Program + 单 Watch；`time_only` 写成 `watches=[] + Recheck`，旧 listener_id 保留为 program_id，便于已有状态和旧提示继续收尾。
 
 ### `manage_sender_activation_access`
 
@@ -358,7 +361,7 @@ reason: 可选的当前语境理由，不向群聊显示
 - 限频使用单调时钟和内存短锁；重启后计数清零，但租约不会因此延长。
 - 同一进程内租约墙钟不回退，已观察到期的租约不会因校时回拨复活。
 - 原生 `@`、引用、唤醒词与命令不经过插件限频。
-- 旧 Heartbeat 与到期清理继续复用 AstrBot 原生 Cron；v1.2 Listener 仅用内存短时任务实现 debounce/watchdog，不建立第二套 Agent 或持久消息正文队列。
+- 旧 Heartbeat 与到期清理继续复用 AstrBot 原生 Cron；rc2 AttentionProgram 仅用内存短时状态实现 Watch debounce、去重与 dirty generation，真正主 Agent 执行仍交回 AstrBot 原生 Cron/Agent，不建立第二套 Agent 或持久消息正文队列。
 - 同一 UMO、同一目标的首条租约消息立即获得额外激活；固定最小间隔内，新事件
   只替换无内容代次，截止时间不顺延，最终仅最新事件任务获得一次机会。
 - 预约器不保存消息正文、组件、事件对象、回复目标或 Provider 请求；进程重启
@@ -381,7 +384,7 @@ reason: 可选的当前语境理由，不向群聊显示
 Plugin Page 使用 AstrBot 注入的 `window.AstrBotPluginPage`：
 
 - 前端只调用 `bridge.apiGet("state")`、`bridge.apiPost("access")`、
-  `bridge.apiPost("activation")`、`bridge.apiPost("rate")` 和
+  `bridge.apiPost("program")`、`bridge.apiPost("activation")`、`bridge.apiPost("rate")` 和
   `bridge.apiPost("heartbeat")`。
 - 页面与 LLM 工具复用同一个应用服务，不复制业务逻辑。
 - 页面关闭后插件保持无头运行。
