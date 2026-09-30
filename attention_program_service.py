@@ -795,8 +795,12 @@ class AttentionProgramService:
         async with self._runtime_lock:
             for program in self._programs.values():
                 runtime = self._program_runtime.setdefault(program.program_id, _ProgramRuntime())
-                runtime.dirty_generation = max(runtime.dirty_generation, 1)
-                runtime.pending_reasons.add("restart_dirty")
+                transition = govern_wake_intents(
+                    runtime,
+                    [restart_intent(contract_id=program.program_id, now=now)],
+                    attention_key_running=False,
+                )
+                self._program_runtime[program.program_id] = transition.runtime
                 self._dirty_marks += 1
                 for watch in program.watches:
                     self._watch_runtime.setdefault(
@@ -862,59 +866,52 @@ class AttentionProgramService:
             self._seen_events.popitem(last=False)
         return True
 
-    @staticmethod
-    def _reset_watch_runtime(runtime: _WatchRuntime) -> None:
-        runtime.observed_since_reset = 0
-        runtime.pending = False
-        runtime.ready_at = 0.0
-        runtime.first_signal_at = 0.0
-        runtime.last_signal_at = 0.0
-        runtime.pending_match_count = 0
-        runtime.latest_event_ref = None
-
-    def _mark_dirty_locked(
+    def _govern_intents_locked(
         self,
         program: AttentionProgram,
-        reasons: Sequence[str],
-        event_refs: Sequence[str] = (),
-    ) -> None:
+        intents: Sequence[WakeIntent],
+    ) -> GovernorDecision:
         runtime = self._program_runtime.setdefault(program.program_id, _ProgramRuntime())
-        runtime.dirty_generation += 1
-        runtime.pending_reasons.update(reason for reason in reasons if reason)
-        for ref in event_refs:
-            if ref and ref not in runtime.event_refs:
-                runtime.event_refs.append(ref)
-        if len(runtime.event_refs) > 16:
-            runtime.event_refs[:] = runtime.event_refs[-16:]
-        self._dirty_marks += 1
+        transition = govern_wake_intents(
+            runtime,
+            intents,
+            attention_key_running=program.attention_key in self._running_keys,
+        )
+        if transition.accepted_intents:
+            self._program_runtime[program.program_id] = transition.runtime
+            self._dirty_marks += 1
+        return transition.decision
 
     def _promote_due_locked(self, program: AttentionProgram, *, now: float) -> bool:
-        reasons: list[str] = []
-        refs: list[str] = []
+        intents: list[WakeIntent] = []
         for watch in program.watches:
             runtime = self._watch_runtime.setdefault(
                 (program.program_id, watch.watch_id),
                 _WatchRuntime(),
             )
-            if not (
-                runtime.pending
-                and runtime.ready_at <= now + DISPATCH_EPSILON_SECONDS
-            ):
+            intent = due_watch_intent(
+                contract_id=program.program_id,
+                watch=watch,
+                runtime=runtime,
+                now=now,
+                epsilon_seconds=DISPATCH_EPSILON_SECONDS,
+            )
+            if intent is None:
                 continue
-            reasons.append(f"watch:{watch.watch_id}")
-            if runtime.latest_event_ref:
-                refs.append(runtime.latest_event_ref)
-            self._reset_watch_runtime(runtime)
+            intents.append(intent)
+            self._watch_runtime[(program.program_id, watch.watch_id)] = (
+                reset_watch_runtime()
+            )
 
         recheck_due = self._recheck_due.get(program.program_id)
         if recheck_due is not None and recheck_due <= now + DISPATCH_EPSILON_SECONDS:
             self._recheck_due.pop(program.program_id, None)
-            reasons.append("recheck")
+            intents.append(recheck_intent(contract_id=program.program_id, now=now))
             self._recheck_signals += 1
 
-        if not reasons:
+        if not intents:
             return False
-        self._mark_dirty_locked(program, reasons, refs)
+        self._govern_intents_locked(program, intents)
         return True
 
     def _next_due_locked(
@@ -926,7 +923,7 @@ class AttentionProgramService:
         due_values: list[float] = []
         for program in self._active_programs_for_key(key, now=now):
             runtime = self._program_runtime.setdefault(program.program_id, _ProgramRuntime())
-            if runtime.dirty_generation > runtime.reconciled_generation:
+            if needs_reconcile(runtime):
                 return now
             for watch in program.watches:
                 wr = self._watch_runtime.get((program.program_id, watch.watch_id))
@@ -1001,21 +998,17 @@ class AttentionProgramService:
             active_ids: list[str] = []
             for program in programs:
                 runtime = self._program_runtime.setdefault(program.program_id, _ProgramRuntime())
-                if runtime.dirty_generation <= runtime.reconciled_generation:
+                claimed_runtime, claim = claim_reconcile(runtime)
+                self._program_runtime[program.program_id] = claimed_runtime
+                if claim is None:
                     continue
-                target_generation = runtime.dirty_generation
-                reasons = tuple(sorted(runtime.pending_reasons)) or ("dirty",)
-                refs = tuple(runtime.event_refs)
-                runtime.reconciled_generation = target_generation
-                runtime.pending_reasons.clear()
-                runtime.event_refs.clear()
                 items.append(
                     _ReconcileItem(
                         program_id=program.program_id,
                         goal=program.goal,
-                        generation=target_generation,
-                        reasons=reasons,
-                        event_refs=refs,
+                        generation=claim.generation,
+                        reasons=tuple(sorted(claim.reasons)),
+                        event_refs=claim.event_refs,
                     )
                 )
                 active_ids.append(program.program_id)
@@ -1045,8 +1038,9 @@ class AttentionProgramService:
                     ):
                         self._recheck_due[program_id] = completion + program.recheck_seconds
                 if any(
-                    self._program_runtime.get(program_id, _ProgramRuntime()).dirty_generation
-                    > self._program_runtime.get(program_id, _ProgramRuntime()).reconciled_generation
+                    needs_reconcile(
+                        self._program_runtime.get(program_id, _ProgramRuntime())
+                    )
                     for program_id in current_ids
                     if self._programs[program_id].attention_key == key
                 ):
@@ -1193,31 +1187,25 @@ class AttentionProgramService:
                     continue
                 program_had_match = False
                 for watch in program.watches:
-                    if not watch.matches(envelope):
-                        continue
-                    program_had_match = True
-                    self._signals_seen += 1
-                    matched.append(f"{program.program_id}:{watch.watch_id}")
                     runtime = self._watch_runtime.setdefault(
                         (program.program_id, watch.watch_id),
                         _WatchRuntime(),
                     )
-                    if runtime.pending:
-                        runtime.ready_at = now + watch.settle_seconds
-                        runtime.last_signal_at = now
-                        runtime.pending_match_count += 1
-                        runtime.latest_event_ref = envelope.ref()
+                    next_runtime, observation = observe_watch(
+                        watch,
+                        runtime,
+                        envelope,
+                        now=now,
+                    )
+                    if not observation.matched:
+                        continue
+                    self._watch_runtime[(program.program_id, watch.watch_id)] = next_runtime
+                    program_had_match = True
+                    self._signals_seen += 1
+                    matched.append(f"{program.program_id}:{watch.watch_id}")
+                    if observation.debounced:
                         self._watch_debounces += 1
-                    else:
-                        runtime.observed_since_reset += 1
-                        if runtime.observed_since_reset < watch.quantifier_count:
-                            continue
-                        runtime.pending = True
-                        runtime.ready_at = now + watch.settle_seconds
-                        runtime.first_signal_at = now
-                        runtime.last_signal_at = now
-                        runtime.pending_match_count = runtime.observed_since_reset
-                        runtime.latest_event_ref = envelope.ref()
+                    if observation.candidate_created:
                         self._watch_candidates += 1
 
                 if program_had_match:
@@ -1266,7 +1254,7 @@ class AttentionProgramService:
             "runtime": {
                 "dirty_generation": runtime.dirty_generation,
                 "reconciled_generation": runtime.reconciled_generation,
-                "dirty": runtime.dirty_generation > runtime.reconciled_generation,
+                "dirty": needs_reconcile(runtime),
                 "attention_key": self.scope_ref(
                     f"{program.scope}\0{program.controller_sender_id}"
                 ),
