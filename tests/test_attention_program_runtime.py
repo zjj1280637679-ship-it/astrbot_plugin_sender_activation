@@ -75,13 +75,14 @@ class FakeJob:
 
 
 class FakeManager:
-    def __init__(self, *, block_runs: bool = False) -> None:
+    def __init__(self, *, block_runs: bool = False, fail_runs: int = 0) -> None:
         self.jobs: dict[str, FakeJob] = {}
         self.next_id = 1
         self.run_payloads: list[dict[str, Any]] = []
         self.running = 0
         self.max_running = 0
         self.block_runs = block_runs
+        self.fail_runs = fail_runs
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
         if not block_runs:
@@ -109,6 +110,9 @@ class FakeManager:
         if job is None:
             return
         self.run_payloads.append(dict(job.payload))
+        if self.fail_runs > 0:
+            self.fail_runs -= 1
+            raise RuntimeError("simulated run_job_now failure")
         self.running += 1
         self.max_running = max(self.max_running, self.running)
         self.entered.set()
@@ -142,6 +146,8 @@ async def new_service(
     store: MemoryStore | None = None,
     legacy_store: MemoryStore | None = None,
     manager: FakeManager | None = None,
+    preflight: Any = None,
+    reconcile_retry_seconds: float = 0.04,
 ) -> tuple[AttentionProgramService, MemoryStore, FakeManager]:
     store = store or MemoryStore()
     manager = manager or FakeManager()
@@ -160,6 +166,8 @@ async def new_service(
         manager,
         legacy_store=legacy_store,
         wall_clock=time.monotonic,
+        preflight=preflight,
+        reconcile_retry_seconds=reconcile_retry_seconds,
     )
     await service.initialize()
     return service, store, manager
@@ -190,11 +198,17 @@ async def create_program(
     return result["program_id"]
 
 
-def sender_watch(*, settle: str = "immediate_0s", quantifier: str = "each") -> dict[str, Any]:
+def sender_watch(
+    *,
+    settle: str = "immediate_0s",
+    quantifier: str = "each",
+    settle_seconds: float = 0,
+) -> dict[str, Any]:
     return {
         "match": {"type": "sender", "values": [TARGET]},
         "quantifier": quantifier,
         "settle": settle,
+        "settle_seconds": settle_seconds,
     }
 
 
@@ -346,6 +360,122 @@ async def test_dirty_while_running_requeues_once_without_concurrency() -> None:
     health = await service.health()
     assert health["program_reconcile_requeues_total"] >= 1
     assert health["harness_governor_coalesced_total"] >= 1
+    await service.terminate()
+
+
+async def test_running_tail_waits_until_last_event_is_quiet() -> None:
+    manager = FakeManager(block_runs=True)
+    service, _, _ = await new_service(manager=manager)
+    program_id = await create_program(
+        service,
+        watches=[sender_watch(settle="custom", settle_seconds=0.05)],
+    )
+
+    await service.observe_event(scope=SCOPE, envelope=envelope("tail-1"))
+    await asyncio.wait_for(manager.entered.wait(), timeout=0.3)
+    assert len(manager.run_payloads) == 1
+
+    # While the first Turn is still running, later events must keep moving the
+    # trailing quiet deadline. There is still only one active Agent.
+    await service.observe_event(scope=SCOPE, envelope=envelope("tail-2"))
+    await asyncio.sleep(0.02)
+    await service.observe_event(scope=SCOPE, envelope=envelope("tail-3"))
+    manager.release.set()
+
+    await asyncio.sleep(0.025)
+    assert len(manager.run_payloads) == 1
+    assert manager.max_running == 1
+
+    await asyncio.sleep(0.055)
+    assert len(manager.run_payloads) == 2
+    assert manager.run_payloads[1][PROGRAM_TAG]["program_ids"] == [program_id]
+    assert manager.max_running == 1
+    await service.terminate()
+
+
+async def test_failed_turn_preserves_dirty_and_retries() -> None:
+    manager = FakeManager(fail_runs=1)
+    service, _, _ = await new_service(
+        manager=manager,
+        reconcile_retry_seconds=0.05,
+    )
+    program_id = await create_program(service, watches=[sender_watch()])
+
+    await service.observe_event(scope=SCOPE, envelope=envelope("fail-1"))
+    await asyncio.sleep(0.02)
+
+    snap = await service.snapshot(scope=SCOPE)
+    runtime = snap["programs"][0]["runtime"]
+    assert runtime["dirty"] is True
+    assert runtime["dirty_generation"] == 1
+    assert runtime["reconciled_generation"] == 0
+    assert runtime["retry_remaining_seconds"] is not None
+    events = [row["event"] for row in snap["programs"][0]["trace"]]
+    assert "turn_deferred" in events
+
+    await asyncio.sleep(0.07)
+    assert len(manager.run_payloads) == 2
+    snap = await service.snapshot(scope=SCOPE)
+    runtime = snap["programs"][0]["runtime"]
+    assert runtime["dirty"] is False
+    assert runtime["reconciled_generation"] == 1
+    events = [row["event"] for row in snap["programs"][0]["trace"]]
+    assert "turn_finished" in events
+
+    health = await service.health()
+    assert health["program_reconcile_failures_total"] >= 1
+    assert health["program_reconcile_retries_total"] >= 1
+    await service.terminate()
+
+
+async def test_preflight_block_does_not_consume_responsibility() -> None:
+    allowed = {"value": False}
+
+    async def preflight(_scope: str) -> bool:
+        return allowed["value"]
+
+    service, _, manager = await new_service(
+        preflight=preflight,
+        reconcile_retry_seconds=0.05,
+    )
+    await create_program(service, watches=[sender_watch()])
+    await service.observe_event(scope=SCOPE, envelope=envelope("preflight-1"))
+    await asyncio.sleep(0.02)
+
+    snap = await service.snapshot(scope=SCOPE)
+    assert snap["programs"][0]["runtime"]["dirty"] is True
+    assert manager.run_payloads == []
+
+    allowed["value"] = True
+    await asyncio.sleep(0.07)
+    assert len(manager.run_payloads) == 1
+    snap = await service.snapshot(scope=SCOPE)
+    assert snap["programs"][0]["runtime"]["dirty"] is False
+    await service.terminate()
+
+
+async def test_temporal_trace_is_bounded_control_plane_feedback() -> None:
+    service, _, manager = await new_service()
+    program_id = await create_program(service, watches=[sender_watch()])
+    await service.observe_event(scope=SCOPE, envelope=envelope("trace-1", message="private body"))
+    await asyncio.sleep(0.03)
+    await service.record_turn_outcome(program_ids=[program_id], outcome="yield")
+
+    snap = await service.snapshot(scope=SCOPE)
+    trace = snap["programs"][0]["trace"]
+    events = [row["event"] for row in trace]
+    assert events[0] == "contract_created"
+    assert "wake_intent" in events
+    assert "turn_started" in events
+    assert "turn_finished" in events
+    assert any(
+        row.get("event") == "turn_outcome" and row.get("outcome") == "yield"
+        for row in trace
+    )
+    serialized = repr(trace)
+    assert "private body" not in serialized
+    assert len(trace) <= 64
+    assert len(manager.run_payloads) == 1
     await service.terminate()
 
 
@@ -686,6 +816,10 @@ async def main() -> None:
     await test_event_envelope_deduplicates_source_plus_id()
     await test_quantifier_and_quiet_period()
     await test_dirty_while_running_requeues_once_without_concurrency()
+    await test_running_tail_waits_until_last_event_is_quiet()
+    await test_failed_turn_preserves_dirty_and_retries()
+    await test_preflight_block_does_not_consume_responsibility()
+    await test_temporal_trace_is_bounded_control_plane_feedback()
     await test_recheck_counts_from_reconcile_completion()
     await test_program_without_watch_uses_recheck_only()
     await test_restart_marks_current_state_dirty_once()
