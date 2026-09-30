@@ -1,8 +1,8 @@
-# Attention Program / Reconcile Runtime：下一目标
+# Attention Program / Reconcile Runtime：v1.2.0-rc.2 工程契约
 
-状态：**结构目标，尚未实现。** 当前可运行版本仍是 `1.2.0-rc.1` 的统一 Listener Runtime；本文把下一阶段目标从“继续增加 Condition”替换为 **AttentionProgram → Watch → Dirty/Reconcile**。任何本文中的新字段都不得在代码或 Skill 中伪装成已实现能力。
+状态：**rc2 已实现候选。** 当前运行时已经从“一 Listener 一职责”重构为 **AttentionProgram → Watch → Dirty/Reconcile**；旧 rc1 Listener 只保留迁移与兼容适配，不再运行第二套 Listener Runtime。
 
-## 1. 新目标
+## 1. 已实现目标
 
 AstrBot 主 AI 被视为群聊沙盒中的连续实体。当前回合可以为开放目标保留有限的未来注意力，但运行时不保存“未来要机械执行的动作”。
 
@@ -19,6 +19,20 @@ AttentionProgram
 一句话：
 
 > **Watch 负责把世界变化变成 dirty；Program 负责表示“哪件事还值得我继续关心”；Agent 每次被唤醒都重新 reconcile 当前世界与 Goal。**
+
+## 1.1 借鉴而不是重造
+
+rc2 的核心句柄直接对齐成熟实现：
+
+- Kubernetes client-go workqueue：同 key single-flight，处理中再次 dirty，完成后再处理一次；
+- controller-runtime Reconcile：触发只说明“可能需要重新计算”，真正处理重新读取当前状态；
+- CloudEvents：事件信封采用 `id/source/type/subject/time` 一类通用句柄，`source + id` 用于去重；
+- AstrBot 原生 Cron/Agent：真正的主 Agent 执行仍由 `run_job_now()` 承载，插件不建立第二套 Agent。
+
+参考：
+- https://pkg.go.dev/k8s.io/client-go/util/workqueue
+- https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/reconcile
+- https://github.com/cloudevents/spec/blob/main/cloudevents/spec.md
 
 ## 2. 最小逻辑树
 
@@ -338,7 +352,7 @@ Projection 是优化层，不属于 Attention Core。
 
 ## 9. 明确不进核心的概念
 
-下一阶段不要把 Runtime 做成 CEP / Workflow DSL。
+rc2 明确不把 Runtime 做成 CEP / Workflow DSL。
 
 暂不进入 Attention Core：
 
@@ -352,9 +366,9 @@ Projection 是优化层，不属于 Attention Core。
 
 真实需求出现时，再分别评估为 Watch Adapter、Projection、Scheduler 或独立业务插件。
 
-## 10. AI 面板目标
+## 10. AI 面板（rc2 已实现）
 
-面板只暴露 AI 真正需要理解的六件事：
+AI 工具与控制台只暴露真正需要理解的六件事：
 
 ```text
 开放目标       Goal
@@ -380,9 +394,9 @@ restart_dirty
 
 全部沉到底层。
 
-## 11. 从 rc1 到下一阶段的迁移原则
+## 11. rc1 → rc2 已实现迁移
 
-当前 `1.2.0-rc.1` 已实现的 Listener 可以映射为：
+rc2 启动时，只有 v2 primary/backup 都真正不存在，才允许把 rc1 Listener 映射为：
 
 ```text
 rc1 Listener.goal              → Program.goal
@@ -393,18 +407,18 @@ rc1 Listener.frequency         → Program.watch[0].quantifier
 rc1 Listener.settle_delay      → Program.watch[0].settle
 ```
 
-因此下一阶段不是推翻 rc1，而是把“一个 Listener = 一个完整职责”拆成：
+rc2 没有推翻 rc1，而是把“一个 Listener = 一个完整职责”拆成：
 
 ```text
 一个 Program
   + 多个 Watch
 ```
 
-旧数据可按“一 Listener → 一 Program + 一 Watch”无损迁移。
+旧 listener_id 原值保留为 program_id；time_only 映射为 `watches=[] + Recheck`。如果 v2 已存在但损坏，Runtime fail inert，禁止用可能陈旧的 v1 覆盖 v2。
 
-## 12. 下一阶段验收
+## 12. rc2 已自动化验收
 
-结构重构完成后至少验证：
+当前候选至少验证：
 
 1. 一个 Program 可以拥有多个 Watch，但只有一个 Goal / Recheck / Lease。
 2. 多个 Watch 同时命中只增加同一 Program 的 dirty generation。
@@ -414,3 +428,7 @@ rc1 Listener.settle_delay      → Program.watch[0].settle
 6. 重启后不复活旧 edge，而是对未过期 Program 做一次 restart reconcile。
 7. rc1 Listener 可以无损迁移成 Program + single Watch。
 8. AI 常规调用不需要接触 Program ID 之外的任何内部并发句柄。
+9. `source + id` 重复 EventEnvelope 不重复处理。
+10. v2 损坏时不会复活陈旧 v1。
+11. Recheck 从实际 Agent 完成时刻重新计时。
+12. 固定 AstrBot 4.27.2 可生成 `watches: array[object]` Tool Schema。
