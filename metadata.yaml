@@ -1,8 +1,8 @@
 name: astrbot_plugin_sender_activation
 display_name: "管理员的真理捍卫器"
-desc: "给 AstrBot 主 AI 增加跨回合主动注意力：以 AttentionProgram 保存开放目标，由多个 Watch 把世界变化标记为 dirty，统一 single-flight 唤醒主 Agent 对当前世界重新判断。"
-short_desc: "让 AstrBot AI 管理自己的注意力：Watch 世界，按需 Reconcile"
-version: "1.2.0-rc.2"
+desc: "建立在 AstrBot 主 Agent 之上的公共自律 Harness：Agent 用 AttentionProgram 声明有限持续职责，Harness 统一治理未来注意力、WakeIntent、dirty/coalesce 与 single-flight Turn。"
+short_desc: "AstrBot 主 Agent 的公共自律 Harness：Contract → Governor → Turn"
+version: "1.3.0-rc.1"
 astrbot_version: ">=4.26.1"
 author: "羊膜大人"
 repo: "https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation"
