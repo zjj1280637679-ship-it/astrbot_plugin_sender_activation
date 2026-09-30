@@ -518,6 +518,8 @@ class AttentionProgramService:
         self._watch_candidates = 0
         self._watch_debounces = 0
         self._dirty_marks = 0
+        self._governor_allow_now = 0
+        self._governor_coalesced = 0
         self._reconciliations = 0
         self._reconcile_requeues = 0
         self._recheck_signals = 0
@@ -880,6 +882,10 @@ class AttentionProgramService:
         if transition.accepted_intents:
             self._program_runtime[program.program_id] = transition.runtime
             self._dirty_marks += 1
+            if transition.decision == GovernorDecision.ALLOW_NOW:
+                self._governor_allow_now += 1
+            elif transition.decision == GovernorDecision.COALESCE:
+                self._governor_coalesced += 1
         return transition.decision
 
     def _promote_due_locked(self, program: AttentionProgram, *, now: float) -> bool:
@@ -1659,6 +1665,8 @@ class AttentionProgramService:
             "program_watch_candidates_total": self._watch_candidates,
             "program_watch_debounces_total": self._watch_debounces,
             "program_dirty_marks_total": self._dirty_marks,
+            "harness_governor_allow_now_total": self._governor_allow_now,
+            "harness_governor_coalesced_total": self._governor_coalesced,
             "program_reconciliations_total": self._reconciliations,
             "program_reconcile_requeues_total": self._reconcile_requeues,
             "program_recheck_signals_total": self._recheck_signals,
