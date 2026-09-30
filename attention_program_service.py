@@ -7,7 +7,7 @@ import math
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +18,23 @@ from .listener_service import (
     LISTENER_SCHEMA_VERSION,
 )
 from .storage import AstrBotKVStateStore, CommitIndeterminateError
+from .harness_core import (
+    AttentionProgram,
+    EventEnvelope,
+    GovernorDecision,
+    ProgramRuntime as _ProgramRuntime,
+    WakeIntent,
+    WatchContract,
+    WatchRuntime as _WatchRuntime,
+    claim_reconcile,
+    due_watch_intent,
+    govern_wake_intents,
+    needs_reconcile,
+    observe_watch,
+    recheck_intent,
+    reset_watch_runtime,
+    restart_intent,
+)
 
 PROGRAM_STATE_KEY = "sender_activation_attention_program_state_v2"
 PROGRAM_BACKUP_KEY = "sender_activation_attention_program_state_v2_lkg"
@@ -72,112 +89,6 @@ class ProgramLimits:
     max_recheck_seconds: float = MAX_RECHECK_SECONDS
     max_lease_seconds: int = MAX_LEASE_SECONDS
     max_dedupe_keys: int = MAX_DEDUPE_KEYS
-
-
-@dataclass(frozen=True)
-class EventEnvelope:
-    """CloudEvents-inspired transient event envelope.
-
-    source + id is used for in-process duplicate suppression. data is transient
-    matching material and is never written into Program storage.
-    """
-
-    id: str
-    source: str
-    type: str
-    subject: str | None
-    occurred_at: float | None
-    observed_at: float
-    payload_ref: str | None
-    data: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
-
-    @property
-    def dedupe_key(self) -> tuple[str, str]:
-        return (self.source, self.id)
-
-    def ref(self) -> str:
-        return self.payload_ref or f"{self.source}#{self.id}"
-
-
-@dataclass(frozen=True)
-class WatchContract:
-    watch_id: str
-    match_kind: str
-    match_values: tuple[str, ...]
-    quantifier_count: int
-    settle_seconds: float
-
-    def matches(self, envelope: EventEnvelope) -> bool:
-        if envelope.type != "com.astrbot.qq.group.message":
-            return False
-        sender_id = str(envelope.subject or "").strip()
-        message = str(envelope.data.get("message") or "")
-        if self.match_kind == "sender":
-            return sender_id in self.match_values
-        if self.match_kind == "keyword":
-            haystack = message.casefold()
-            return any(value.casefold() in haystack for value in self.match_values)
-        if self.match_kind == "any_message":
-            return True
-        return False
-
-    def as_record(self) -> dict[str, Any]:
-        return {
-            "watch_id": self.watch_id,
-            "match_kind": self.match_kind,
-            "match_values": list(self.match_values),
-            "quantifier_count": self.quantifier_count,
-            "settle_seconds": self.settle_seconds,
-        }
-
-
-@dataclass(frozen=True)
-class AttentionProgram:
-    program_id: str
-    scope: str
-    controller_sender_id: str
-    goal: str
-    watches: tuple[WatchContract, ...]
-    recheck_seconds: float | None
-    created_at: float
-    expires_at: float
-    created_by: str
-
-    @property
-    def attention_key(self) -> tuple[str, str]:
-        return (self.scope, self.controller_sender_id)
-
-    def as_record(self) -> dict[str, Any]:
-        return {
-            "program_id": self.program_id,
-            "scope": self.scope,
-            "controller_sender_id": self.controller_sender_id,
-            "goal": self.goal,
-            "watches": [watch.as_record() for watch in self.watches],
-            "recheck_seconds": self.recheck_seconds,
-            "created_at": self.created_at,
-            "expires_at": self.expires_at,
-            "created_by": self.created_by,
-        }
-
-
-@dataclass
-class _WatchRuntime:
-    observed_since_reset: int = 0
-    pending: bool = False
-    ready_at: float = 0.0
-    first_signal_at: float = 0.0
-    last_signal_at: float = 0.0
-    pending_match_count: int = 0
-    latest_event_ref: str | None = None
-
-
-@dataclass
-class _ProgramRuntime:
-    dirty_generation: int = 0
-    reconciled_generation: int = 0
-    pending_reasons: set[str] = field(default_factory=set)
-    event_refs: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
