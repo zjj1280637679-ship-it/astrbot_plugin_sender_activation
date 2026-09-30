@@ -673,10 +673,16 @@ class SenderActivationPlugin(Star):
             "管理复用 AstrBot 原生 Cron 的有限期心跳租约",
         )
         self.context.register_web_api(
+            f"{API_PREFIX}/program",
+            self._web_program,
+            ["POST"],
+            "管理 AttentionProgram：Goal、Watch、Recheck 与 Lease",
+        )
+        self.context.register_web_api(
             f"{API_PREFIX}/listener",
             self._web_listener,
             ["POST"],
-            "管理统一监听订单：条件、频率、延迟与无事件兜底",
+            "兼容 rc1 统一监听接口；底层映射为 AttentionProgram",
         )
         self.context.register_web_api(
             f"{API_PREFIX}/access",
@@ -699,7 +705,7 @@ class SenderActivationPlugin(Star):
         access = self.access_service.snapshot()
         attention = self.attention_service.snapshot()
         echo = await self._safe_echo_snapshot()
-        listeners = await self.listener_service.snapshot()
+        programs = await self.program_service.snapshot()
         scope_map: dict[str, str] = {}
         for scope in [
             *state["known_scopes"],
@@ -707,7 +713,7 @@ class SenderActivationPlugin(Star):
             *access["known_scopes"],
             *attention["known_scopes"],
             *echo["raw_scopes"],
-            *listeners["raw_scopes"],
+            *programs["raw_scopes"],
         ]:
             reference = self.service.scope_ref(scope)
             if reference in scope_map and scope_map[reference] != scope:
@@ -799,7 +805,8 @@ class SenderActivationPlugin(Star):
         )
         attention = self.attention_service.snapshot(scope=scope)
         echo = await self._safe_echo_snapshot(scope=scope)
-        listeners = await self.listener_service.snapshot(scope=scope)
+        programs = await self.program_service.snapshot(scope=scope)
+        listeners = await self.program_service.legacy_listener_snapshot(scope=scope)
         if scope is None:
             source = {
                 **source,
@@ -811,6 +818,7 @@ class SenderActivationPlugin(Star):
             heartbeat["heartbeat_leases"] = []
             attention["ignore_policies"] = []
             echo["echo_hooks"] = []
+            programs["programs"] = []
             listeners["listeners"] = []
 
         def project(row: dict[str, Any]) -> dict[str, Any]:
@@ -830,6 +838,8 @@ class SenderActivationPlugin(Star):
             "heartbeat_quarantined": heartbeat["quarantined"],
             "echo_hooks": echo["echo_hooks"],
             "echo_quarantined": echo["quarantined"],
+            "programs": [project(row) for row in programs["programs"]],
+            "program_quarantined": programs["quarantined"],
             "listeners": [project(row) for row in listeners["listeners"]],
             "listener_quarantined": listeners["quarantined"],
             "known_scopes": sorted(await self._page_scope_map()),
@@ -982,7 +992,7 @@ class SenderActivationPlugin(Star):
     def _echo_source_allowed(self, source: str) -> bool:
         if source == "native_wake":
             return self.settings.echo_allow_native_wake_source
-        if source in {"sender_activation", "listener"}:
+        if source in {"sender_activation", "attention_program"}:
             return self.settings.echo_allow_sender_activation_source
         if source == "heartbeat":
             return self.settings.echo_allow_heartbeat_source
@@ -1045,24 +1055,48 @@ class SenderActivationPlugin(Star):
         except Exception:
             logger.exception("[sender_activation] attention_guard_failed")
 
-    @filter.custom_filter(ActiveListenerFilter, priority=2500)
-    async def observe_active_listener_signal(self, event: AstrMessageEvent) -> None:
-        """Convert matching non-@ messages into normalized listener signals only."""
+    @filter.custom_filter(AttentionProgramFilter, priority=2500)
+    async def observe_attention_program_signal(self, event: AstrMessageEvent) -> None:
+        """Adapt one AstrBot message into an EventEnvelope and mark Programs dirty."""
         try:
             if event.get_extra(ATTENTION_IGNORED_EXTRA):
                 return
-            await self.listener_service.observe_event(
-                scope=self._scope(event),
-                sender_id=self._sender(event),
-                message=getattr(event, "message_str", ""),
+            scope = self._scope(event)
+            sender_id = self._sender(event)
+            message_obj = getattr(event, "message_obj", None)
+            message_id = str(getattr(message_obj, "message_id", "") or "").strip()
+            occurred_raw = getattr(message_obj, "timestamp", None)
+            try:
+                occurred_at = float(occurred_raw) if occurred_raw is not None else None
+            except (TypeError, ValueError, OverflowError):
+                occurred_at = None
+            if not message_id:
+                material = (
+                    f"{scope}|{sender_id}|{occurred_at}|"
+                    f"{getattr(event, 'message_str', '')}"
+                )
+                message_id = hashlib.sha256(material.encode("utf-8")).hexdigest()
+            envelope = EventEnvelope(
+                id=message_id,
+                source=f"astrbot://aiocqhttp/{self.service.scope_ref(scope)}",
+                type="com.astrbot.qq.group.message",
+                subject=sender_id,
+                occurred_at=occurred_at,
+                observed_at=time.time(),
+                payload_ref=message_id,
+                data={"message": getattr(event, "message_str", "")},
+            )
+            await self.program_service.observe_event(
+                scope=scope,
+                envelope=envelope,
             )
         except DomainError as exc:
             logger.debug(
-                "[sender_activation] listener_signal_inert code=%s",
+                "[sender_activation] attention_program_signal_inert code=%s",
                 exc.code,
             )
         except Exception:
-            logger.exception("[sender_activation] listener_signal_failed")
+            logger.exception("[sender_activation] attention_program_signal_failed")
 
     @filter.custom_filter(SenderActivationFilter, priority=2000)
     async def activate_native_agent(self, event: AstrMessageEvent) -> None:
@@ -1749,7 +1783,7 @@ class SenderActivationPlugin(Star):
                 **self.attention_service.health(),
                 **await self.heartbeat_service.health(),
                 **await self.echo_service.health(),
-                **await self.listener_service.health(),
+                **await self.program_service.health(),
                 **self.activation_reservations.health(),
                 "turn_yield_count": self._yield_count,
             }
