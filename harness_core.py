@@ -141,6 +141,7 @@ class GovernorTransition:
 @dataclass(frozen=True)
 class ReconcileClaim:
     generation: int
+    previous_reconciled_generation: int
     reasons: tuple[str, ...]
     event_refs: tuple[str, ...]
 
@@ -315,6 +316,7 @@ def claim_reconcile(runtime: ProgramRuntime) -> tuple[ProgramRuntime, ReconcileC
     generation = runtime.dirty_generation
     claim = ReconcileClaim(
         generation=generation,
+        previous_reconciled_generation=runtime.reconciled_generation,
         reasons=runtime.pending_reasons or ("dirty",),
         event_refs=runtime.event_refs,
     )
@@ -326,6 +328,48 @@ def claim_reconcile(runtime: ProgramRuntime) -> tuple[ProgramRuntime, ReconcileC
             event_refs=(),
         ),
         claim,
+    )
+
+
+def restore_reconcile_claim(
+    runtime: ProgramRuntime,
+    claim: ReconcileClaim,
+    *,
+    max_event_refs: int = 16,
+) -> ProgramRuntime:
+    """Restore a claimed generation after the Agent Turn did not actually run.
+
+    Claiming is an execution reservation, not proof of successful reconciliation.
+    Failure must preserve responsibility. Signals that arrived while the failed
+    Turn was in flight are merged with the restored claim.
+    """
+
+    reasons = list(claim.reasons)
+    for reason in runtime.pending_reasons:
+        if reason and reason not in reasons:
+            reasons.append(reason)
+
+    refs = list(claim.event_refs)
+    for ref in runtime.event_refs:
+        if not ref:
+            continue
+        if ref in refs:
+            refs.remove(ref)
+        refs.append(ref)
+
+    if max_event_refs == 0:
+        refs = []
+    elif max_event_refs > 0 and len(refs) > max_event_refs:
+        refs = refs[-max_event_refs:]
+
+    return ProgramRuntime(
+        dirty_generation=max(runtime.dirty_generation, claim.generation),
+        reconciled_generation=min(
+            runtime.reconciled_generation,
+            claim.previous_reconciled_generation,
+        ),
+        pending_reasons=tuple(reasons),
+        event_refs=tuple(refs),
     )
 
 
