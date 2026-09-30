@@ -36,11 +36,17 @@ from .heartbeat_gate import HeartbeatWakeGate
 from .heartbeat_service import HeartbeatService
 from .listener_service import (
     LISTENER_BACKUP_KEY,
-    LISTENER_EFFECT_CONTRACT,
     LISTENER_STATE_KEY,
-    ListenerLimits,
-    ListenerService,
-    is_owned_listener_payload,
+)
+from .attention_program_service import (
+    PROGRAM_BACKUP_KEY,
+    PROGRAM_EFFECT_CONTRACT,
+    PROGRAM_STATE_KEY,
+    PROGRAM_TAG,
+    EventEnvelope,
+    ProgramLimits,
+    AttentionProgramService,
+    is_owned_program_payload,
 )
 from .echo_service import (
     ECHO_EFFECT_CONTRACT,
@@ -65,7 +71,7 @@ from .settings import PluginSettings
 from .storage import AstrBotKVStateStore
 
 PLUGIN_NAME = "astrbot_plugin_sender_activation"
-VERSION = "1.2.0-rc.1"
+VERSION = "1.2.0-rc.2"
 DECISION_EXTRA = "sender_activation_decision"
 RECOVERY_REPORT_EXTRA = "sender_activation_recovery_report"
 TURN_YIELD_EXTRA = "sender_activation_turn_yield"
@@ -79,7 +85,8 @@ _TOOL_EFFECT_CONTRACTS = {
     "manage_sender_activation": ACTIVATION_EFFECT_CONTRACT,
     "manage_sender_activation_rate": RATE_EFFECT_CONTRACT,
     "manage_heartbeat_lease": HEARTBEAT_EFFECT_CONTRACT,
-    "manage_active_listener": LISTENER_EFFECT_CONTRACT,
+    "manage_active_listener": PROGRAM_EFFECT_CONTRACT,
+    "manage_attention_program": PROGRAM_EFFECT_CONTRACT,
     "yield_current_turn": "contextual_no_visible_reply_for_plugin_proactive_turn",
     "manage_attention_ignore": IGNORE_EFFECT_CONTRACT,
     "manage_echo_hook": ECHO_EFFECT_CONTRACT,
@@ -225,6 +232,41 @@ _TOOL_ERROR_POLICIES: dict[str, tuple[str, str, bool]] = {
         "cancel_unused_listeners_or_raise_limit",
         False,
     ),
+    "program_scheduler_unavailable": (
+        "host_capability",
+        "enable_native_active_agent_scheduler",
+        False,
+    ),
+    "program_service_inactive": (
+        "host_capability",
+        "inspect_program_runtime_health",
+        False,
+    ),
+    "program_storage_unavailable": (
+        "storage",
+        "inspect_program_storage",
+        False,
+    ),
+    "program_storage_write_failed": (
+        "storage",
+        "retry_after_program_storage_recovery",
+        True,
+    ),
+    "program_commit_indeterminate": (
+        "storage",
+        "reload_and_inspect_program_state",
+        False,
+    ),
+    "program_scope_capacity_exceeded": (
+        "capacity",
+        "cancel_unused_programs_or_raise_limit",
+        False,
+    ),
+    "program_total_capacity_exceeded": (
+        "capacity",
+        "cancel_unused_programs_or_raise_limit",
+        False,
+    ),
     "yield_not_available": (
         "state_precondition",
         "reply_normally_or_wait_for_plugin_proactive_turn",
@@ -325,6 +367,7 @@ def _tool_error(error: DomainError, tool: str) -> str:
         "native_cron_update_indeterminate",
         "heartbeat_preflight_update_indeterminate",
         "listener_commit_indeterminate",
+        "program_commit_indeterminate",
     }
     return _json(
         {
@@ -379,13 +422,13 @@ class AttentionGuardFilter(CustomFilter):
             return False
 
 
-class ActiveListenerFilter(CustomFilter):
+class AttentionProgramFilter(CustomFilter):
     """Low-cost event sensor. Matching only emits a signal; it never wakes the Agent directly."""
 
     def filter(self, event: AstrMessageEvent, cfg: Any) -> bool:
         try:
             plugin = _ACTIVE_PLUGIN
-            if plugin is None or not plugin.listener_service.active:
+            if plugin is None or not plugin.program_service.active:
                 return False
             if event.get_platform_name() != "aiocqhttp" or event.is_private_chat():
                 return False
@@ -401,7 +444,7 @@ class ActiveListenerFilter(CustomFilter):
             session_status = plugin.session_gate.read_sync(scope)
             if session_status.enabled is False:
                 return False
-            return plugin.listener_service.has_match(
+            return plugin.program_service.has_match(
                 scope,
                 sender_id,
                 getattr(event, "message_str", ""),
@@ -512,15 +555,20 @@ class SenderActivationPlugin(Star):
             AstrBotCronAdapter(context, active_execution_enabled=False),
             self.heartbeat_wake_gate,
         )
-        self.listener_service = ListenerService(
-            ListenerLimits(),
+        self.program_service = AttentionProgramService(
+            ProgramLimits(),
             AstrBotKVStateStore(
+                self,
+                state_key=PROGRAM_STATE_KEY,
+                backup_key=PROGRAM_BACKUP_KEY,
+            ),
+            getattr(context, "cron_manager", None),
+            legacy_store=AstrBotKVStateStore(
                 self,
                 state_key=LISTENER_STATE_KEY,
                 backup_key=LISTENER_BACKUP_KEY,
             ),
-            getattr(context, "cron_manager", None),
-            preflight=self._listener_preflight,
+            preflight=self._program_preflight,
         )
         self.activation_reservations = ActivationReservationCoordinator(
             self.settings.activation_min_interval_seconds,
@@ -551,10 +599,10 @@ class SenderActivationPlugin(Star):
                 exc.code,
             )
         try:
-            await self.listener_service.initialize()
+            await self.program_service.initialize()
         except DomainError as exc:
             logger.warning(
-                "[sender_activation] listener_inert error=%s",
+                "[sender_activation] attention_program_inert error=%s",
                 exc.code,
             )
         self._register_web_apis()
@@ -587,11 +635,11 @@ class SenderActivationPlugin(Star):
                 "[sender_activation] heartbeat_shutdown_failures count=%d",
                 len(heartbeat_failures),
             )
-        listener_failures = await self.listener_service.terminate()
-        if listener_failures:
+        program_failures = await self.program_service.terminate()
+        if program_failures:
             logger.warning(
-                "[sender_activation] listener_shutdown_failures count=%d",
-                len(listener_failures),
+                "[sender_activation] attention_program_shutdown_failures count=%d",
+                len(program_failures),
             )
         await self.attention_service.terminate()
         await self.service.terminate()
@@ -704,7 +752,7 @@ class SenderActivationPlugin(Star):
         status = await self._session_status(scope)
         return status.enabled is not False
 
-    async def _listener_preflight(self, scope: str) -> bool:
+    async def _program_preflight(self, scope: str) -> bool:
         if self._terminated:
             return False
         status = await self._session_status(scope)
@@ -797,7 +845,7 @@ class SenderActivationPlugin(Star):
         if (
             is_owned_echo_payload(payload)
             or is_owned_heartbeat_payload(payload)
-            or is_owned_listener_payload(payload)
+            or is_owned_program_payload(payload)
         ):
             return payload
         return None
@@ -859,6 +907,7 @@ class SenderActivationPlugin(Star):
             "manage_sender_activation_rate",
             "manage_heartbeat_lease",
             "manage_active_listener",
+            "manage_attention_program",
             "manage_attention_ignore",
             "manage_echo_hook",
         )
@@ -914,8 +963,8 @@ class SenderActivationPlugin(Star):
         payload = event.get_extra("cron_payload")
         if isinstance(payload, dict) and is_owned_echo_payload(payload):
             return "echo"
-        if isinstance(payload, dict) and is_owned_listener_payload(payload):
-            return "listener"
+        if isinstance(payload, dict) and is_owned_program_payload(payload):
+            return "attention_program"
         if event.get_extra(DECISION_EXTRA):
             return "sender_activation"
         if (
@@ -1192,8 +1241,8 @@ class SenderActivationPlugin(Star):
         payload = event.get_extra("cron_payload")
         if isinstance(payload, dict) and is_owned_echo_payload(payload):
             return "echo"
-        if isinstance(payload, dict) and is_owned_listener_payload(payload):
-            return "listener"
+        if isinstance(payload, dict) and is_owned_program_payload(payload):
+            return "attention_program"
         if event.get_extra(DECISION_EXTRA):
             return "sender_activation"
         if (
