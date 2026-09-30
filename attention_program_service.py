@@ -5,7 +5,7 @@ import hashlib
 import inspect
 import math
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,6 +34,7 @@ from .harness_core import (
     recheck_intent,
     reset_watch_runtime,
     restart_intent,
+    restore_reconcile_claim,
 )
 
 PROGRAM_STATE_KEY = "sender_activation_attention_program_state_v2"
@@ -54,6 +55,8 @@ MAX_LEASE_SECONDS = 7 * 24 * 60 * 60
 MAX_WATCHES_PER_PROGRAM = 8
 MAX_DEDUPE_KEYS = 4096
 DISPATCH_EPSILON_SECONDS = 0.001
+RECONCILE_RETRY_SECONDS = 5.0
+MAX_TRACE_ENTRIES_PER_PROGRAM = 64
 
 QUANTIFIER_PRESETS: dict[str, int] = {
     "each": 1,
@@ -504,6 +507,7 @@ class AttentionProgramService:
         wall_clock: Callable[[], float] = time.time,
         preflight: Callable[[str], bool | Awaitable[bool]] | None = None,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        reconcile_retry_seconds: float = RECONCILE_RETRY_SECONDS,
     ) -> None:
         self.limits = limits
         self._store = store
@@ -512,6 +516,7 @@ class AttentionProgramService:
         self._wall_clock = wall_clock
         self._preflight = preflight
         self._sleeper = sleeper
+        self._reconcile_retry_seconds = max(0.01, float(reconcile_retry_seconds))
 
         self._state_lock = asyncio.Lock()
         self._runtime_lock = asyncio.Lock()
@@ -520,6 +525,8 @@ class AttentionProgramService:
         self._program_runtime: dict[str, _ProgramRuntime] = {}
         self._watch_runtime: dict[tuple[str, str], _WatchRuntime] = {}
         self._recheck_due: dict[str, float] = {}
+        self._retry_due: dict[str, float] = {}
+        self._trace_by_program: dict[str, deque[dict[str, Any]]] = {}
         self._dispatch_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
         self._dispatch_generation: dict[tuple[str, str], int] = {}
         self._running_keys: set[tuple[str, str]] = set()
@@ -547,6 +554,8 @@ class AttentionProgramService:
         self._reconcile_requeues = 0
         self._recheck_signals = 0
         self._preflight_suppressed = 0
+        self._reconcile_failures = 0
+        self._reconcile_retries = 0
 
     def _now(self) -> float:
         return float(self._wall_clock())
@@ -554,6 +563,50 @@ class AttentionProgramService:
     @staticmethod
     def scope_ref(scope: str) -> str:
         return hashlib.sha256(scope.encode("utf-8")).hexdigest()[:12]
+
+    def _trace_locked(
+        self,
+        program_id: str,
+        event: str,
+        *,
+        at: float | None = None,
+        **facts: Any,
+    ) -> None:
+        row: dict[str, Any] = {
+            "timestamp": self._now() if at is None else float(at),
+            "event": str(event),
+        }
+        for key, value in facts.items():
+            if value is not None:
+                row[str(key)] = value
+        bucket = self._trace_by_program.setdefault(
+            program_id,
+            deque(maxlen=MAX_TRACE_ENTRIES_PER_PROGRAM),
+        )
+        bucket.append(row)
+
+    async def record_turn_outcome(
+        self,
+        *,
+        program_ids: Sequence[str],
+        outcome: str,
+    ) -> None:
+        """Append one objective control-plane outcome for active Programs.
+
+        This is deliberately not a semantic self-evaluation API. It records only
+        a bounded, volatile fact that a proactive Turn yielded or otherwise
+        exposed an explicit control outcome.
+        """
+
+        normalized = str(outcome or "").strip().lower()
+        if not normalized:
+            return
+        async with self._runtime_lock:
+            now = self._now()
+            for program_id in program_ids:
+                pid = str(program_id or "").strip()
+                if pid and pid in self._programs:
+                    self._trace_locked(pid, "turn_outcome", at=now, outcome=normalized)
 
     def _require_manager(self) -> Any:
         manager = self._manager
@@ -861,6 +914,8 @@ class AttentionProgramService:
         self._program_runtime.clear()
         self._watch_runtime.clear()
         self._recheck_due.clear()
+        self._retry_due.clear()
+        self._trace_by_program.clear()
         self._seen_events.clear()
         for task in tasks:
             if not task.done():
@@ -905,6 +960,14 @@ class AttentionProgramService:
         if transition.accepted_intents:
             self._program_runtime[program.program_id] = transition.runtime
             self._dirty_marks += 1
+            self._trace_locked(
+                program.program_id,
+                "wake_intent",
+                decision=transition.decision.value,
+                generation=transition.generation,
+                reasons=[intent.reason for intent in intents if intent.reason],
+                sources=[intent.source for intent in intents if intent.source],
+            )
             if transition.decision == GovernorDecision.ALLOW_NOW:
                 self._governor_allow_now += 1
             elif transition.decision == GovernorDecision.COALESCE:
@@ -953,7 +1016,7 @@ class AttentionProgramService:
         for program in self._active_programs_for_key(key, now=now):
             runtime = self._program_runtime.setdefault(program.program_id, _ProgramRuntime())
             if needs_reconcile(runtime):
-                return now
+                due_values.append(max(now, self._retry_due.get(program.program_id, 0.0)))
             for watch in program.watches:
                 wr = self._watch_runtime.get((program.program_id, watch.watch_id))
                 if wr is not None and wr.pending:
@@ -1024,9 +1087,13 @@ class AttentionProgramService:
                 self._promote_due_locked(program, now=now)
 
             items: list[_ReconcileItem] = []
+            claims: dict[str, Any] = {}
             active_ids: list[str] = []
             for program in programs:
                 runtime = self._program_runtime.setdefault(program.program_id, _ProgramRuntime())
+                retry_due = self._retry_due.get(program.program_id, 0.0)
+                if needs_reconcile(runtime) and retry_due > now + DISPATCH_EPSILON_SECONDS:
+                    continue
                 claimed_runtime, claim = claim_reconcile(runtime)
                 self._program_runtime[program.program_id] = claimed_runtime
                 if claim is None:
@@ -1040,15 +1107,24 @@ class AttentionProgramService:
                         event_refs=claim.event_refs,
                     )
                 )
+                claims[program.program_id] = claim
                 active_ids.append(program.program_id)
+                self._trace_locked(
+                    program.program_id,
+                    "turn_started",
+                    at=now,
+                    generation=claim.generation,
+                    reasons=list(claim.reasons),
+                )
 
             if not items:
                 self._reschedule_key_locked(key, now=now)
                 return
             self._running_keys.add(key)
 
+        execution_outcome = "execution_failed"
         try:
-            await self._execute_reconcile(
+            execution_outcome = await self._execute_reconcile(
                 scope=scope,
                 controller_sender_id=controller_sender_id,
                 items=items,
@@ -1060,12 +1136,38 @@ class AttentionProgramService:
                 current_ids = set(self._programs)
                 for program_id in active_ids:
                     program = self._programs.get(program_id)
-                    if (
-                        program is not None
-                        and program.expires_at > completion
-                        and program.recheck_seconds is not None
-                    ):
-                        self._recheck_due[program_id] = completion + program.recheck_seconds
+                    if program is None or program.expires_at <= completion:
+                        continue
+
+                    if execution_outcome == "completed":
+                        self._retry_due.pop(program_id, None)
+                        self._trace_locked(
+                            program_id,
+                            "turn_finished",
+                            at=completion,
+                            outcome="completed",
+                        )
+                        if program.recheck_seconds is not None:
+                            self._recheck_due[program_id] = completion + program.recheck_seconds
+                    else:
+                        claim = claims.get(program_id)
+                        if claim is not None:
+                            runtime = self._program_runtime.get(program_id, _ProgramRuntime())
+                            self._program_runtime[program_id] = restore_reconcile_claim(
+                                runtime,
+                                claim,
+                            )
+                        retry_at = completion + self._reconcile_retry_seconds
+                        self._retry_due[program_id] = retry_at
+                        self._reconcile_failures += 1
+                        self._trace_locked(
+                            program_id,
+                            "turn_deferred",
+                            at=completion,
+                            outcome=execution_outcome,
+                            retry_at=retry_at,
+                        )
+
                 if any(
                     needs_reconcile(
                         self._program_runtime.get(program_id, _ProgramRuntime())
@@ -1074,6 +1176,8 @@ class AttentionProgramService:
                     if self._programs[program_id].attention_key == key
                 ):
                     self._reconcile_requeues += 1
+                    if execution_outcome != "completed":
+                        self._reconcile_retries += 1
                 self._reschedule_key_locked(key, now=completion)
 
     async def _execute_reconcile(
@@ -1082,10 +1186,10 @@ class AttentionProgramService:
         scope: str,
         controller_sender_id: str,
         items: list[_ReconcileItem],
-    ) -> None:
+    ) -> str:
         if not await self._preflight_allowed(scope):
             self._preflight_suppressed += 1
-            return
+            return "preflight_blocked"
 
         rows: list[str] = []
         for item in items:
@@ -1158,6 +1262,7 @@ class AttentionProgramService:
             self._active_job_ids.add(job_id)
             await manager.run_job_now(job_id)
             self._reconciliations += 1
+            return "completed"
         except Exception as exc:
             self.quarantined.append(
                 {
@@ -1165,6 +1270,7 @@ class AttentionProgramService:
                     "error_code": f"program_execute_{type(exc).__name__}",
                 }
             )
+            return "execution_failed"
         finally:
             if job is not None:
                 job_id = str(getattr(job, "job_id", "") or "")
@@ -1276,6 +1382,8 @@ class AttentionProgramService:
                 }
             )
         recheck_due = self._recheck_due.get(program.program_id)
+        retry_due = self._retry_due.get(program.program_id)
+        trace = list(self._trace_by_program.get(program.program_id, ()))
         return {
             **program.as_record(),
             "scope_ref": self.scope_ref(program.scope),
@@ -1294,7 +1402,14 @@ class AttentionProgramService:
                     if recheck_due is not None
                     else None
                 ),
+                "retry_due_at": retry_due,
+                "retry_remaining_seconds": (
+                    max(0, math.ceil(retry_due - now))
+                    if retry_due is not None
+                    else None
+                ),
             },
+            "trace": trace,
         }
 
     async def snapshot(self, *, scope: Any | None = None) -> dict[str, Any]:
@@ -1453,6 +1568,7 @@ class AttentionProgramService:
                     for program in selected:
                         self._program_runtime.pop(program.program_id, None)
                         self._recheck_due.pop(program.program_id, None)
+                        self._retry_due.pop(program.program_id, None)
                         for watch in program.watches:
                             self._watch_runtime.pop((program.program_id, watch.watch_id), None)
                     for key in affected_keys:
@@ -1549,6 +1665,13 @@ class AttentionProgramService:
             async with self._runtime_lock:
                 await self._commit_programs(active)
                 self._program_runtime[program_id] = _ProgramRuntime()
+                self._retry_due.pop(program_id, None)
+                self._trace_by_program[program_id] = deque(maxlen=MAX_TRACE_ENTRIES_PER_PROGRAM)
+                self._trace_locked(
+                    program_id,
+                    "contract_created" if normalized_action == "create" else "contract_updated",
+                    at=now,
+                )
                 for key in [key for key in self._watch_runtime if key[0] == program_id]:
                     self._watch_runtime.pop(key, None)
                 for watch in program.watches:
@@ -1695,5 +1818,8 @@ class AttentionProgramService:
             "program_reconcile_requeues_total": self._reconcile_requeues,
             "program_recheck_signals_total": self._recheck_signals,
             "program_preflight_suppressed_total": self._preflight_suppressed,
+            "program_reconcile_failures_total": self._reconcile_failures,
+            "program_reconcile_retries_total": self._reconcile_retries,
+            "program_trace_entries": sum(len(rows) for rows in self._trace_by_program.values()),
             "program_quarantined_count": quarantined,
         }
