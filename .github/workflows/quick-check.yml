@@ -20,7 +20,8 @@ jobs:
           python --version
           python -m py_compile \
             attention_domain.py attention_service.py echo_service.py \
-            heartbeat_domain.py heartbeat_gate.py cron_adapter.py listener_service.py
+            heartbeat_domain.py heartbeat_gate.py cron_adapter.py listener_service.py \
+            attention_program_service.py
           python -m json.tool _conf_schema.json >/dev/null
           node --check pages/state/app.js
           git diff --check
@@ -31,3 +32,4 @@ jobs:
           python tests/test_heartbeat_gate.py
           python tests/test_concurrency_boundary.py
           python tests/test_listener_runtime.py
+          python tests/test_attention_program_runtime.py
