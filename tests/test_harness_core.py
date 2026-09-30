@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 
@@ -36,6 +37,30 @@ def event(event_id: str, *, sender: str = "10001", message: str = "hello") -> Ev
         payload_ref=f"message:{event_id}",
         data={"message": message},
     )
+
+
+def test_core_has_no_astrbot_or_asyncio_dependency() -> None:
+    source = (ROOT / "harness_core.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    forbidden: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            forbidden.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            forbidden.append(node.module)
+    assert not any(
+        name == "asyncio"
+        or name.startswith("astrbot")
+        or name.startswith("astrbot_plugin_sender_activation")
+        for name in forbidden
+    ), forbidden
+
+
+def test_event_envelope_is_transport_neutral_fact_container() -> None:
+    envelope = event("same", sender="10001", message="opaque payload")
+    assert envelope.dedupe_key == ("astrbot://test/group", "same")
+    assert envelope.ref() == "message:same"
+    assert envelope.data["message"] == "opaque payload"
 
 
 def test_watch_quantifier_and_settle_are_pure_reducers() -> None:
@@ -265,6 +290,8 @@ def test_empty_intent_batch_waits_without_mutation() -> None:
 
 
 def main() -> None:
+    test_core_has_no_astrbot_or_asyncio_dependency()
+    test_event_envelope_is_transport_neutral_fact_container()
     test_watch_quantifier_and_settle_are_pure_reducers()
     test_many_wake_intents_become_one_dirty_generation()
     test_already_dirty_or_running_is_coalesced()
