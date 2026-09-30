@@ -90,11 +90,16 @@ AstrBot / 外部世界
         └─ Done / Cancel
                 │
                 ▼
-     若运行期间再次 dirty
-          再 reconcile 一次
+     若运行期间再次出现相关变化
+       不并发；继续更新 tail/dirty
                 │
                 ▼
-     Recheck 从完成时刻重新计时
+     当前 Turn 完成后复用原 Settle
+       quiet 未满足 → 继续等待
+       quiet 已满足 → 可立即继续
+                │
+                ▼
+     Recheck 从成功完成时刻重新计时
                 │
                 ▼
         Lease 到期最终退出
@@ -235,13 +240,21 @@ dirty_generation += 1
 Agent 完成：
 
 ```text
-dirty_generation > reconciled_generation
-    → 再 reconcile 一次
+若运行期间存在新的 Watch tail
+    → 继续服从该 Watch 的 trailing Settle
+
+若已有 dirty 且没有更晚的 quiet deadline
+    → 可再次 reconcile
+
+若 Turn 未真正成功执行
+    → 恢复已 claim generation 为 dirty
+    → 短 backoff 后重试
+
 否则
     → idle
 ```
 
-这是 Runtime 的背压与 single-flight 核心。
+Claim 只是执行预约，不是已完成证明。失败/preflight blocked 不得把责任伪装成 reconciled。
 
 ## 5. EventEnvelope：给更广泛外界数据的薄接口
 
@@ -427,12 +440,14 @@ rc2 没有推翻 rc1，而是把“一个 Listener = 一个完整职责”拆成
 1. 一个 Program 可以拥有多个 Watch，但只有一个 Goal / Recheck / Lease。
 2. 多个 Watch 同时命中只增加同一 Program 的 dirty generation。
 3. 多个 Program 同属一个 AttentionKey 时仍只有一个主 Agent single-flight。
-4. Agent 运行期间的新事件不会并发启动第二个 Agent；完成后若仍 dirty，再 reconcile。
+4. Agent 运行期间的新事件不会并发启动第二个 Agent；新的 Watch tail 继续更新 quiet deadline，完成后按 trailing Settle 决定下一 Turn。
 5. Recheck 与任何外部 Watch 一样，只产生 dirty signal。
 6. 重启后不复活旧 edge，而是对未过期 Program 做一次 restart reconcile。
 7. rc1 Listener 可以无损迁移成 Program + single Watch。
 8. AI 常规调用不需要接触 Program ID 之外的任何内部并发句柄。
 9. `source + id` 重复 EventEnvelope 不重复处理。
 10. v2 损坏时不会复活陈旧 v1。
-11. Recheck 从实际 Agent 完成时刻重新计时。
-12. 固定 AstrBot 4.27.2 可生成 `watches: array[object]` Tool Schema。
+11. Recheck 从实际成功 Agent Turn 完成时刻重新计时。
+12. Agent dispatch / preflight 失败不会消费 dirty generation，并经过短 backoff 重试。
+13. Program list 暴露 bounded volatile Temporal Trace；Trace 不保存完整消息正文或私有思维链。
+14. AstrBot 4.27.2 与 4.28.2 均通过 Tool Schema / Runtime 集成检查。
