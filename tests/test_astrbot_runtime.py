@@ -20,10 +20,10 @@ from astrbot_plugin_sender_activation.echo_service import (  # noqa: E402
 )
 from astrbot_plugin_sender_activation.heartbeat_domain import heartbeat_payload  # noqa: E402
 from astrbot_plugin_sender_activation.main import SenderActivationPlugin  # noqa: E402
-from astrbot_plugin_sender_activation.listener_service import (  # noqa: E402
-    LISTENER_KIND,
-    LISTENER_SCHEMA_VERSION,
-    LISTENER_TAG,
+from astrbot_plugin_sender_activation.attention_program_service import (  # noqa: E402
+    PROGRAM_KIND,
+    PROGRAM_SCHEMA_VERSION,
+    PROGRAM_TAG,
 )
 from astrbot_plugin_sender_activation.settings import PluginSettings  # noqa: E402
 from astrbot.core.agent.tool import ToolSet  # noqa: E402
@@ -149,13 +149,14 @@ def make_cron(payload: dict[str, Any]) -> CronMessageEvent:
 
 
 def test_registration() -> None:
-    assert plugin_main.VERSION == "1.2.0-rc.1"
+    assert plugin_main.VERSION == "1.2.0-rc.2"
     expected = [
         "manage_sender_activation_access",
         "manage_sender_activation",
         "manage_sender_activation_rate",
         "manage_heartbeat_lease",
         "manage_active_listener",
+        "manage_attention_program",
         "yield_current_turn",
         "manage_attention_ignore",
         "manage_echo_hook",
@@ -173,9 +174,11 @@ def test_registration() -> None:
     ignore_schema = next(row for row in full if row["function"]["name"] == "manage_attention_ignore")
     echo_schema = next(row for row in full if row["function"]["name"] == "manage_echo_hook")
     listener_schema = next(row for row in full if row["function"]["name"] == "manage_active_listener")
+    program_schema = next(row for row in full if row["function"]["name"] == "manage_attention_program")
     ignore_props = ignore_schema["function"]["parameters"]["properties"]
     echo_props = echo_schema["function"]["parameters"]["properties"]
     listener_props = listener_schema["function"]["parameters"]["properties"]
+    program_props = program_schema["function"]["parameters"]["properties"]
     assert {"target_ids", "trigger_count", "trigger_window_seconds", "ignore_duration_seconds", "policy_seconds"} <= set(ignore_props)
     assert {"delay_seconds", "count", "interval_seconds", "instruction"} <= set(echo_props)
     assert {
@@ -187,6 +190,15 @@ def test_registration() -> None:
         "lifetime",
         "goal",
     } <= set(listener_props)
+    assert {
+        "program_ids",
+        "goal",
+        "watches",
+        "recheck",
+        "lease",
+    } <= set(program_props)
+    assert program_props["watches"]["type"] == "array"
+    assert program_props["watches"].get("items", {}).get("type") == "object"
     print(
         "tool_schema_chars",
         json.dumps(
@@ -207,14 +219,14 @@ def test_handler_priority() -> None:
     ]
     by_name = {handler.handler_name: handler for handler in handlers}
     guard = by_name["apply_attention_guard"]
-    listener = by_name["observe_active_listener_signal"]
+    program_sensor = by_name["observe_attention_program_signal"]
     activation = by_name["activate_native_agent"]
     assert guard.extras_configs["priority"] == 3000
-    assert listener.extras_configs["priority"] == 2500
+    assert program_sensor.extras_configs["priority"] == 2500
     assert activation.extras_configs["priority"] == 2000
     ordered_names = [handler.handler_name for handler in handlers]
-    assert ordered_names.index("apply_attention_guard") < ordered_names.index("observe_active_listener_signal")
-    assert ordered_names.index("observe_active_listener_signal") < ordered_names.index("activate_native_agent")
+    assert ordered_names.index("apply_attention_guard") < ordered_names.index("observe_attention_program_signal")
+    assert ordered_names.index("observe_attention_program_signal") < ordered_names.index("activate_native_agent")
 
 
 def test_owned_cron_context() -> None:
@@ -236,25 +248,26 @@ def test_owned_cron_context() -> None:
         source="tool",
         sender_id=A,
     )
-    listener = {
+    program = {
         "session": SCOPE,
         "sender_id": A,
         "origin": "astrbot_plugin_sender_activation",
-        "note": "listener test",
-        LISTENER_TAG: {
-            "kind": LISTENER_KIND,
-            "schema_version": LISTENER_SCHEMA_VERSION,
-            "listener_ids": ["listener-test"],
-            "reasons": [["watchdog_due"]],
+        "note": "program reconcile test",
+        PROGRAM_TAG: {
+            "kind": PROGRAM_KIND,
+            "schema_version": PROGRAM_SCHEMA_VERSION,
+            "program_ids": ["program-test"],
+            "generations": [1],
             "created_at": 1000.0,
-            "normalized": True,
+            "level_triggered": True,
+            "single_flight": True,
         },
     }
-    listener_event = make_cron(listener)
-    assert SenderActivationPlugin._scope(listener_event) == SCOPE
-    assert SenderActivationPlugin._sender(listener_event) == A
-    assert plugin._activation_source(listener_event) == "listener"
-    assert plugin._plugin_proactive_source(listener_event) == "listener"
+    program_event = make_cron(program)
+    assert SenderActivationPlugin._scope(program_event) == SCOPE
+    assert SenderActivationPlugin._sender(program_event) == A
+    assert plugin._activation_source(program_event) == "attention_program"
+    assert plugin._plugin_proactive_source(program_event) == "attention_program"
 
     heartbeat_event = make_cron(heartbeat)
     assert SenderActivationPlugin._scope(heartbeat_event) == SCOPE
@@ -388,7 +401,7 @@ async def main() -> None:
     test_config_authority()
     await test_guard_modes()
     await test_echo_preflight_gate()
-    print("v1.2 AstrBot runtime integration counterexamples: PASS")
+    print("v1.2 rc2 AstrBot runtime integration counterexamples: PASS")
 
 
 if __name__ == "__main__":
