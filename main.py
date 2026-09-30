@@ -1562,6 +1562,84 @@ class SenderActivationPlugin(Star):
                 tool,
             )
 
+    @filter.llm_tool(name="manage_attention_program")
+    async def manage_attention_program(
+        self,
+        event: AstrMessageEvent,
+        action: str = "",
+        program_ids: list[str] | None = None,
+        goal: str = "",
+        watches: list[dict[str, Any]] | None = None,
+        recheck: str = "default_3m",
+        recheck_seconds: float = 0,
+        lease: str = "2h",
+        lease_seconds: int = 0,
+    ) -> str:
+        """管理 AI 的 AttentionProgram。Program 表示一个尚未完成的开放目标；Watch 只负责把世界变化标记为 dirty，主 Agent 每次醒来都重新读取当前世界并 reconcile，而不是执行旧命令。create/update 使用完整期望状态，cancel 结束，list 查询。
+
+        Args:
+            action(string): create、update、cancel 或 list。
+            program_ids(array[string]): update 必须且只能填一个 Program ID；cancel 可填多个；create/list 留空。
+            goal(string): 每次重新醒来后要基于当前世界重新判断的开放目标，不要写固定未来台词。
+            watches(array[object]): Watch 数组，最多 8 个。每项格式：{"match":{"type":"sender|keyword|any_message","values":["..."]},"quantifier":"each|every_3|every_10|custom","quantifier_count":0,"settle":"immediate_0s|normal_1s|settle_3s|custom","settle_seconds":0}。sender 的 values 填真实数字 QQ ID；keyword 填关键词；any_message 的 values 为空。可传空数组，此时必须启用 Recheck。
+            recheck(string): 无外界事件时最迟多久也重新检查一次。default_3m=3 分钟；ten_min=10 分钟；thirty_min=30 分钟；off=关闭；custom=使用 recheck_seconds。
+            recheck_seconds(number): 仅 recheck=custom 时填写。
+            lease(string): Program 有效期：10m、30m、2h、24h 或 custom。
+            lease_seconds(number): 仅 lease=custom 时填写，最长 7 天。
+        """
+        tool = "manage_attention_program"
+        try:
+            scope = self._scope(event)
+            actor = self._actor(event)
+            action_name = str(action or "").strip().lower()
+            try:
+                authorization_basis = self.access_service.authorize(
+                    actor=actor,
+                    scope=scope,
+                    capability="activation",
+                    action=action_name,
+                )
+            except DomainError as auth_error:
+                if (
+                    auth_error.code == "operator_access_required"
+                    and actor.proactive_source == "attention_program"
+                    and action_name == "cancel"
+                    and self.program_service.owns_all(
+                        scope=scope,
+                        controller_sender_id=actor.sender_id,
+                        program_ids=program_ids,
+                    )
+                ):
+                    authorization_basis = "attention_program_self_maintenance"
+                else:
+                    raise
+            if action_name in {"create", "update"}:
+                await self._require_new_state_allowed(scope)
+            result = await self.program_service.manage(
+                scope=scope,
+                action=action_name,
+                controller_sender_id=actor.sender_id,
+                actor_ref=actor.actor_ref,
+                program_ids=program_ids,
+                goal=goal,
+                watches=watches,
+                recheck=recheck,
+                recheck_seconds=recheck_seconds,
+                lease=lease,
+                lease_seconds=lease_seconds,
+            )
+            result["tool"] = tool
+            result["authorization_basis"] = authorization_basis
+            return _json(result)
+        except DomainError as exc:
+            return _tool_error(exc, tool)
+        except Exception as exc:
+            logger.exception("[sender_activation] attention_program_tool_failed")
+            return _tool_error(
+                DomainError("internal_error", f"工具执行失败: {type(exc).__name__}"),
+                tool,
+            )
+
     @filter.llm_tool(name="manage_active_listener")
     async def manage_active_listener(
         self,
@@ -1580,22 +1658,22 @@ class SenderActivationPlugin(Star):
         lifetime_seconds: int = 0,
         goal: str = "",
     ) -> str:
-        """管理 AI 的统一监听订单。监听只产生信号，不直接回复；信号按订单自己的频率与消抖延迟归一化，之后同一群/控制主体只产生一次主 Agent 激活。start 建立监听，cancel 净化指定 listener_id，list 查询。
+        """兼容 rc1 的统一监听工具。新开放目标优先使用 manage_attention_program；本工具会把一个 Listener 无损映射为一个 Program + 单 Watch，time_only 映射为无 Watch + Recheck。
 
         Args:
             action(string): start、cancel 或 list。
-            listener_ids(list[string]): cancel 时填写 list 返回的 listener_id；list 可空。
-            condition_kind(string): 监听什么。sender=指定 QQ ID；keyword=任意消息包含关键词；any_message=当前群任意普通消息，配合频率可表达“再有 N 条消息”；time_only=不监听消息，只靠定时兜底自行醒来。
-            condition_values(list[string]): sender 填真实数字 QQ ID；keyword 填关键词；any_message/time_only 留空。
-            frequency(string): 带标注预设。each=每次命中；every_3=累计 3 次；every_10=累计 10 次；custom=使用 frequency_count。
-            frequency_count(number): 仅 frequency=custom 时填写自定义命中次数。
-            response_speed(string): 带标注预设。immediate_0s=立即；normal_1s=普通 1 秒；settle_3s=复杂连续场景等 3 秒；custom=使用 settle_delay_seconds。等待期间新的同类命中会重置倒计时，只保留最新状态。
-            settle_delay_seconds(number): 仅 response_speed=custom 时填写，0 至 30 秒。
-            watchdog(string): 无条件命中的活性兜底。default_3m=默认 3 分钟；ten_min=10 分钟；thirty_min=30 分钟；off=关闭；custom=使用 watchdog_seconds。兜底只保证再次判断，不保证发言。
-            watchdog_seconds(number): 仅 watchdog=custom 时填写。
-            lifetime(string): 有效期预设。10m、30m、2h、24h 或 custom。
-            lifetime_seconds(number): 仅 lifetime=custom 时填写，最长 7 天。
-            goal(string): 唯一主要填空项：未来醒来后要重新判断的开放目标。不要把固定回复写成 goal。
+            listener_ids(array[string]): cancel 时填写旧 listener_id；迁移后它等于 program_id。
+            condition_kind(string): sender、keyword、any_message 或兼容 time_only。
+            condition_values(array[string]): sender 填真实数字 QQ ID；keyword 填关键词。
+            frequency(string): each、every_3、every_10 或 custom。
+            frequency_count(number): 仅 custom 使用。
+            response_speed(string): immediate_0s、normal_1s、settle_3s 或 custom。
+            settle_delay_seconds(number): 仅 custom 使用。
+            watchdog(string): default_3m、ten_min、thirty_min、off 或 custom。
+            watchdog_seconds(number): 仅 custom 使用。
+            lifetime(string): 10m、30m、2h、24h 或 custom。
+            lifetime_seconds(number): 仅 custom 使用。
+            goal(string): 每次醒来后重新判断的开放目标。
         """
         tool = "manage_active_listener"
         try:
@@ -1612,22 +1690,22 @@ class SenderActivationPlugin(Star):
             except DomainError as auth_error:
                 if (
                     auth_error.code == "operator_access_required"
-                    and actor.proactive_source == "listener"
+                    and actor.proactive_source == "attention_program"
                     and action_name == "cancel"
-                    and self.listener_service.owns_all(
+                    and self.program_service.owns_all(
                         scope=scope,
-                        owner_sender_id=actor.sender_id,
-                        listener_ids=listener_ids,
+                        controller_sender_id=actor.sender_id,
+                        program_ids=listener_ids,
                     )
                 ):
-                    authorization_basis = "listener_self_maintenance"
+                    authorization_basis = "attention_program_self_maintenance"
                 else:
                     raise
             if action_name == "start":
                 await self._require_new_state_allowed(scope)
-            result = await self.listener_service.manage(
+            result = await self.program_service.manage_legacy_listener(
                 scope=scope,
-                action=action,
+                action=action_name,
                 owner_sender_id=actor.sender_id,
                 actor_ref=actor.actor_ref,
                 condition_kind=condition_kind,
@@ -1649,7 +1727,7 @@ class SenderActivationPlugin(Star):
         except DomainError as exc:
             return _tool_error(exc, tool)
         except Exception as exc:
-            logger.exception("[sender_activation] listener_tool_failed")
+            logger.exception("[sender_activation] listener_compat_tool_failed")
             return _tool_error(
                 DomainError("internal_error", f"工具执行失败: {type(exc).__name__}"),
                 tool,
