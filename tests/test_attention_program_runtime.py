@@ -504,6 +504,36 @@ async def test_corrupt_v2_never_resurrects_stale_v1() -> None:
     assert manager.run_payloads == []
 
 
+async def test_legacy_read_error_blocks_empty_startup() -> None:
+    service, _, manager = await new_service(
+        store=MemoryStore(),
+        legacy_store=ReadErrorStore(),
+    )
+    assert service.storage_ready is False
+    assert service.active is False
+    assert service.loaded_from == "legacy_read_error"
+    assert service.last_error_code.startswith("legacy_listener_slot_read_failed:")
+    assert manager.run_payloads == []
+
+
+async def test_unrecognized_legacy_state_blocks_empty_startup() -> None:
+    legacy = MemoryStore(
+        primary={
+            "schema_version": 999,
+            "listeners": [],
+        }
+    )
+    service, _, manager = await new_service(
+        store=MemoryStore(),
+        legacy_store=legacy,
+    )
+    assert service.storage_ready is False
+    assert service.active is False
+    assert service.loaded_from == "legacy_invalid"
+    assert service.last_error_code == "legacy_listener_state_unrecognized"
+    assert manager.run_payloads == []
+
+
 async def test_v2_read_error_never_looks_like_absent_state() -> None:
     now = time.monotonic()
     legacy = MemoryStore(
@@ -579,6 +609,8 @@ async def main() -> None:
     await test_restart_marks_current_state_dirty_once()
     await test_listener_v1_migration_preserves_ids()
     await test_corrupt_v2_never_resurrects_stale_v1()
+    await test_legacy_read_error_blocks_empty_startup()
+    await test_unrecognized_legacy_state_blocks_empty_startup()
     await test_v2_read_error_never_looks_like_absent_state()
     await test_update_preserves_controller_and_replaces_desired_watches()
     print("v1.2 rc2 attention program counterexamples: PASS")
