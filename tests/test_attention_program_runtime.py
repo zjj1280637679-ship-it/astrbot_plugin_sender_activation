@@ -478,8 +478,11 @@ async def test_temporal_trace_is_bounded_control_plane_feedback() -> None:
     # Overflow must evict old control facts rather than growing without bound.
     for _ in range(80):
         await service.record_turn_outcome(program_ids=[program_id], outcome="yield")
-    overflow = (await service.snapshot(scope=SCOPE))["programs"][0]["trace"]
-    assert len(overflow) == 64
+    overflow_program = (await service.snapshot(scope=SCOPE))["programs"][0]
+    overflow = overflow_program["trace"]
+    assert len(overflow) == 16
+    assert overflow_program["trace_total"] == 64
+    assert overflow_program["trace_truncated"] is True
     assert all(row.get("event") == "turn_outcome" for row in overflow)
     assert "private body" not in repr(overflow)
     assert len(manager.run_payloads) == 1
