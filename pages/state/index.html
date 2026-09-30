@@ -30,6 +30,10 @@
           <strong id="rate-count">0</strong>
         </div>
         <div>
+          <span class="label">统一监听</span>
+          <strong id="listener-count">0</strong>
+        </div>
+        <div>
           <span class="label">全局心跳租约</span>
           <strong id="heartbeat-count">0</strong>
         </div>
@@ -199,8 +203,98 @@
         <div id="recovery-empty" class="empty-state">暂无待处理恢复报告</div>
       </section>
 
-      <section class="section">
-        <h2>激活租约</h2>
+      <section class="section listener-primary">
+        <div class="section-heading">
+          <div>
+            <h2>统一主动监听</h2>
+            <p class="scope-note">条件监听是主路径；默认 3 分钟无事件也会让 AI 重新检查一次。所有命中先归一化，再统一激活主 Agent。</p>
+          </div>
+          <span id="listener-row-count" class="muted">0 条</span>
+        </div>
+        <form id="listener-form" class="form-grid listener-form">
+          <label>
+            <span>控制主体 QQ ID</span>
+            <input id="listener-owner" type="text" inputmode="numeric" autocomplete="off" placeholder="未来由谁的主 Agent 身份继续判断" required />
+          </label>
+          <label>
+            <span>监听条件</span>
+            <select id="listener-condition-kind">
+              <option value="sender">指定用户发言</option>
+              <option value="keyword">出现关键词</option>
+              <option value="any_message">群里出现新消息</option>
+              <option value="time_only">只做定时自检</option>
+            </select>
+          </label>
+          <label class="wide">
+            <span>条件值</span>
+            <input id="listener-condition-values" type="text" autocomplete="off" placeholder="用户填 QQ ID；关键词可用逗号分隔" />
+          </label>
+          <label>
+            <span>频率</span>
+            <select id="listener-frequency">
+              <option value="each">每次命中</option>
+              <option value="every_3">每 3 次</option>
+              <option value="every_10">每 10 次</option>
+            </select>
+          </label>
+          <label>
+            <span>响应速度</span>
+            <select id="listener-response-speed">
+              <option value="immediate_0s">立即（0 秒）</option>
+              <option value="normal_1s" selected>普通（1 秒）</option>
+              <option value="settle_3s">等说完（3 秒）</option>
+            </select>
+          </label>
+          <label>
+            <span>无事件兜底</span>
+            <select id="listener-watchdog">
+              <option value="default_3m" selected>默认（3 分钟）</option>
+              <option value="ten_min">宽松（10 分钟）</option>
+              <option value="thirty_min">长周期（30 分钟）</option>
+              <option value="off">关闭</option>
+            </select>
+          </label>
+          <label>
+            <span>有效期</span>
+            <select id="listener-lifetime">
+              <option value="10m">10 分钟</option>
+              <option value="30m">30 分钟</option>
+              <option value="2h" selected>2 小时</option>
+              <option value="24h">24 小时</option>
+            </select>
+          </label>
+          <label class="full-width">
+            <span>开放目标</span>
+            <textarea id="listener-goal" rows="3" maxlength="2000" placeholder="例如：关注今日练习汇报；人报齐后统一反馈，若一直有人未报则检查并决定是否提醒。" required></textarea>
+          </label>
+          <div class="form-action">
+            <button type="submit">开始监听</button>
+          </div>
+        </form>
+        <div id="listener-table-wrap" class="table-wrap">
+          <table class="listener-table">
+            <thead>
+              <tr>
+                <th>监听 ID</th>
+                <th>条件</th>
+                <th>频率 / 延迟</th>
+                <th>兜底</th>
+                <th>剩余</th>
+                <th>开放目标</th>
+                <th class="actions-column">操作</th>
+              </tr>
+            </thead>
+            <tbody id="listener-rows"></tbody>
+          </table>
+        </div>
+        <div id="listener-empty" class="empty-state">暂无统一监听</div>
+      </section>
+
+      <section class="section legacy-section">
+        <div class="section-heading">
+          <h2>兼容：旧对象激活租约</h2>
+          <span class="muted">高级 / 旧配置</span>
+        </div>
         <form id="activation-form" class="form-grid">
           <label>
             <span>操作</span>
