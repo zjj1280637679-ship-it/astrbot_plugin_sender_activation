@@ -880,6 +880,20 @@ class AttentionProgramService:
                 )
                 self._program_runtime[program.program_id] = transition.runtime
                 self._dirty_marks += 1
+                self._trace_locked(
+                    program.program_id,
+                    "runtime_restart",
+                    at=now,
+                )
+                self._trace_locked(
+                    program.program_id,
+                    "wake_intent",
+                    at=now,
+                    decision=transition.decision.value,
+                    generation=transition.generation,
+                    reasons=["restart_dirty"],
+                    sources=["restart"],
+                )
                 for watch in program.watches:
                     self._watch_runtime.setdefault(
                         (program.program_id, watch.watch_id),
@@ -1321,6 +1335,7 @@ class AttentionProgramService:
                 if program.expires_at <= now:
                     continue
                 program_had_match = False
+                program_watch_ids: list[str] = []
                 for watch in program.watches:
                     runtime = self._watch_runtime.setdefault(
                         (program.program_id, watch.watch_id),
@@ -1337,6 +1352,7 @@ class AttentionProgramService:
                         continue
                     self._watch_runtime[(program.program_id, watch.watch_id)] = next_runtime
                     program_had_match = True
+                    program_watch_ids.append(watch.watch_id)
                     self._signals_seen += 1
                     matched.append(f"{program.program_id}:{watch.watch_id}")
                     if observation.debounced:
@@ -1345,6 +1361,13 @@ class AttentionProgramService:
                         self._watch_candidates += 1
 
                 if program_had_match:
+                    self._trace_locked(
+                        program.program_id,
+                        "world_signal",
+                        at=now,
+                        watch_ids=program_watch_ids,
+                        event_ref=envelope.ref(),
+                    )
                     before = self._program_runtime.setdefault(
                         program.program_id,
                         _ProgramRuntime(),
