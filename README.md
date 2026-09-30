@@ -102,22 +102,22 @@ AstrBot 原生的 `@`、引用、唤醒词和命令可以可靠地唤醒主 Agen
 管理员的真理捍卫器只补充这些基础机制，不复制原生 Agent：
 
 ```text
-M = A_native ∪ {W, I, H, L_i, N, E, Y}
+M = A_native ∪ {P, I, H, L_i, N, E, Y}
 ```
 
 - `A_native`：AstrBot 原生 Agent、上下文、`@`、命令、主动回复与 Cron。
-- `W`：v1.2 统一 Listener Runtime；条件、频率、延迟与 watchdog 只产生并归一化激活信号。
+- `P`：rc2 AttentionProgram Runtime；Goal + 多 Watch + Recheck + Lease，事件只 mark dirty，再按 AttentionKey single-flight reconcile。
 - `I`：当前 UMO 与指定 QQ ID 组成的有限期额外激活租约。
 - `H`：当前 UMO 上复用 AstrBot 原生 Cron 的有限期时序激活租约。
 - `L_i`：只约束 `I` 所产生额外激活的可选、有限期限频租约。
 - `N`：部署者授权后，由主 Agent 管理的对象级有限 Ignore 策略；对象、计数与时间窗口可叠加。
 - `E`：显式可选、有限、不可递归的 Echo 主动再激活 Hook。
-- `Y`：仅在 `I/H/E` 新增的主动回合中，由主 Agent 正式选择无可见回复。
+- `Y`：仅在 `P/I/H/E` 新增的主动回合中，由主 Agent 正式选择无可见回复。
 
 生命周期闭环为：
 
 ```text
-W/I/H/E 激活 -> 原生主 Agent 看现场 -> 行动或 Y 让出
+P/I/H/E 激活 -> 原生主 Agent 看现场 -> 行动或 Y 让出
         -> 达成目标、人工撤销或有限期到期 -> 回到 A_native
 ```
 
@@ -125,12 +125,12 @@ W/I/H/E 激活 -> 原生主 Agent 看现场 -> 行动或 Y 让出
 
 ```text
 Decision = AstrBot 原生主 Agent 对完整语境的理解
-Execute  = 插件按正式工具帧维护 W、I、H、L_i 与当前回合 Y
+Execute  = 插件按正式工具帧维护 P、I、H、L_i 与当前回合 Y
 Fallback = 插件异常、状态损坏、明确停用或租约失效时回到 A_native
 ```
 
 插件不会把 AstrBot 超级管理员权限扩散给普通成员。管理员可以按当前群和
-QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插件的统一监听、对象激活、
+QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插件的 AttentionProgram、对象激活、
 限频和心跳，不能配置 AstrBot、操作其他插件或跨群转授权。插件不判断谁
 掌握真理、何时必须反驳；主 Agent 可以根据新证据修正或结束租约。若插件自身
 崩溃或被宿主阻塞，失败语义只能是“不再新增唤醒”，不能阻断或改写原生路径。
@@ -146,7 +146,7 @@ QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插�
 | 自建或选择大语言模型 | 主 Agent 与 Provider 生命周期由 AstrBot 负责 |
 | 限制原生 `@`、引用、命令或普通会话 | 限频只消费本插件新增的激活额度 |
 | 阻断、改写或保存消息内容 | 被替换的事件继续走原生流水线；预约器只保存时间、代次和唤醒信号 |
-| 另建持久 Cron 数据库或第二套 Agent | Listener 只用内存短时调度做 debounce/watchdog，到真正激活时仍交回 AstrBot 原生主 Agent |
+| 另建持久 Cron 数据库或第二套 Agent | AttentionProgram 只维护短时 Watch/dirty 状态，真正激活仍交回 AstrBot 原生主 Agent |
 | 自动读取 QQ 新消息或历史记录 | 心跳只提供判断机会；信息能力需由主 Agent 组合现有工具 |
 | 对普通原生回合强制沉默 | `yield_current_turn` 只接受本插件新增的主动回合 |
 | 提供安全级 DDoS 防御 | 内存计数器是运营保护，重启后清零 |
@@ -315,7 +315,7 @@ Cron 页面停用的任务不会被强行开启。
 reason: 可选的当前语境理由，不向群聊显示
 ```
 
-只允许由本插件统一监听、对象激活、心跳或回响产生的当前主动回合调用。成功后使用 AstrBot
+只允许由本插件 AttentionProgram、对象激活、心跳或回响产生的当前主动回合调用。成功后使用 AstrBot
 本地工具的终结返回直接结束当前原生 Agent 工具循环，并移除本轮最终助手
 文本；不会再进入下一次工具选择。已经执行的外部工具动作不会撤销。普通
 `@`、普通原生会话和其他插件唤醒不能用它抹除回复。
