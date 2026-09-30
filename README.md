@@ -186,7 +186,7 @@ QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插�
 | AstrBot 配置 | 对插件的影响 |
 | --- | --- |
 | `provider_settings.enable` | 必须开启；关闭后租约最多只能产生 wake 机会，主 Agent 不会运行 |
-| `provider_settings.agent_runner_type` | 首版只验收内置 `local` Agent；第三方 Agent 执行器不在正式支持范围 |
+| `agent_runner.runner_type`（AstrBot 4.28+；旧版回退 `provider_settings.agent_runner_type`） | 首版只验收内置 `local` Agent；第三方 Agent 执行器不在正式支持范围 |
 | 当前对话模型的 `tool_use` 能力 | 必须具备，否则主 Agent 不能可靠建立、净化和维护监听状态 |
 | `provider_settings.show_tool_use_status=false` | 要实现完全无可见回复时应关闭；否则宿主可能先发送工具调用状态 |
 | `provider_settings.identifier`（用户识别） | 使用“我、本人、刚才那个人”等表达时应开启，使主 Agent 获得真实 User ID；插件事件层仍会读取 ID，但模型看不到就无法可靠填写 `target_ids` |
