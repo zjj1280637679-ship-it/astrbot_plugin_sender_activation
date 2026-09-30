@@ -1,131 +1,155 @@
 ---
 name: group-duty-orchestration
-description: 当用户要求 AI 跨话轮持续关注群聊、等待未来条件、主动参与实时事件，或主 Agent 需要给未来的自己留下有限监听时使用。优先用统一监听订单；功能讨论、假设、引用和单次回复不改变未来状态。
+description: 当用户要求 AI 跨话轮持续关注、等待未来变化、主动参与实时事件，或主 Agent 需要为开放目标留下有限未来注意力时使用。优先建立 AttentionProgram；功能讨论、假设、引用和单次回复不改变未来状态。
 ---
 
-# 群聊主动注意力
+# 主动注意力与跨回合职责
 
-## 核心原则
+## 心智模型
 
-把自己视为当前 AstrBot 群聊中的连续实体。当前回合结束不代表开放目标结束。
+把自己视为当前 AstrBot 沙盒中的连续实体。当前回合结束，不代表开放目标结束。
 
-需要未来继续知情时，优先使用 `manage_active_listener` 建立**有限监听订单**。监听器只产生信号，不直接回复；信号经过频率与延迟归一化后，才统一唤醒主 Agent。每次醒来重新读取当前语境并判断：
+需要未来继续知情时，优先使用 `manage_attention_program`：
 
-- 有公开价值：正常行动或回复。
-- 没有公开价值：调用 `yield_current_turn`。
-- 目标已完成或监听已无意义：先 `manage_active_listener(cancel)` 净化，再按需回复或沉默。
-- 忘记净化不会要求机械发言；兜底再次唤醒时仍重新判断。
+```text
+AttentionProgram
+= Goal
++ Watch[]
++ Recheck
++ Lease
+```
 
-## 建立监听
+- **Goal**：每次醒来后重新判断什么开放目标。
+- **Watch**：哪些世界变化值得让这个 Goal 重新计算。
+- **Quantifier**：多少次匹配才值得看。
+- **Settle**：匹配后环境安静多久才认为这一波结束。
+- **Recheck**：即使没有匹配，最迟多久也回来重新看一次。
+- **Lease**：这项职责最多存在多久。
 
-先回答两个问题：
+Watch 和 Recheck 只产生 dirty signal，不是未来命令。Runtime 会按控制主体 single-flight 归一化；真正醒来后必须重新读取**当前世界**，而不是机械执行建立 Program 时设想的动作。
 
-1. **未来什么变化值得我知道？**
-2. **醒来后我要重新判断什么开放目标？**
+## 建立 Program
 
-然后从工具里的带标注选项选择，不要无意义地发明精细参数。
+先回答：
 
-### 条件
+1. **Goal：醒来后我要重新判断什么？**
+2. **Watch：什么变化值得让我重新看？**
+3. **Recheck：如果这些变化一直没发生，是否仍要定期复查？**
+4. **Lease：这项职责何时最终退出？**
 
-`condition_kind`：
+### Goal
 
-- `sender`：指定 QQ ID 发言。
-- `keyword`：任意普通消息包含指定关键词。
-- `any_message`：当前群任意普通消息；与频率组合可表达“再有 N 条消息”。
-- `time_only`：不依赖新消息，只靠定时兜底重新检查。
-
-`condition_values` 只在 `sender` 或 `keyword` 时填写。用户身份必须使用可验证的真实数字 QQ ID；昵称不能直接冒充 ID。
-
-### 频率
-
-`frequency`：
-
-- `each`：每次命中都形成候选。
-- `every_3`：累计 3 次形成候选。
-- `every_10`：累计 10 次形成候选。
-- `custom`：确有必要时再填写 `frequency_count`。
-
-频率回答“多少个相关事件值得形成一次候选”，不是 Agent 回复频率。
-
-### 响应速度
-
-`response_speed`：
-
-- `immediate_0s`：立即，适合必须快速跟进。
-- `normal_1s`：默认，吸收短暂连续消息。
-- `settle_3s`：适合连续发言、多人汇报等复杂场景。
-- `custom`：确有必要时再填写 `settle_delay_seconds`。
-
-等待期间若同一监听继续命中，倒计时从最新命中重新计算；最终只产生一次归一化激活。不要把延迟理解为固定“每条消息晚 N 秒执行”。
-
-### 无事件兜底
-
-`watchdog`：
-
-- `default_3m`：默认。3 分钟即使没有条件命中，也重新检查一次。
-- `ten_min`：10 分钟。
-- `thirty_min`：30 分钟。
-- `off`：目标无需“无事件也复查”时关闭。
-- `custom`：确有必要时再填写 `watchdog_seconds`。
-
-条件监听负责敏捷性，兜底负责活性。兜底只保证一次重新判断机会，不保证发言。
-
-### 有效期
-
-`lifetime` 优先选 `10m`、`30m`、`2h`、`24h`；只有特殊情况才用 `custom`。不要建立永久职责。
-
-### goal
-
-`goal` 是主要自由文本字段。写“未来醒来后要重新判断的目标”，不要写死固定回复。
+写可重算目标，不写固定未来台词。
 
 好：
 
-> 关注学员练习汇报；人报齐后统一反馈，若一直有人未报则在兜底回合检查并决定是否提醒。
+> 判断今日学员练习汇报是否完整；完整则统一反馈；不完整则根据当前时间和缺席情况判断是否提醒。
 
 不好：
 
-> 三分钟后发送“请大家签到”。
+> 三分钟后发送“还有谁没签到？”
 
-前者允许主 Agent根据当时世界重新判断；后者把监听退化成机械工作流。
+### Watch
+
+一个 Program 可以有多个 Watch；它们共享同一个 Goal / Recheck / Lease。
+
+`match.type`：
+
+- `sender`：指定真实数字 QQ ID 发言。
+- `keyword`：普通消息包含关键词。
+- `any_message`：当前群任意普通消息。
+
+不要为了“只按时间复查”制造特殊 Watch：直接传空 `watches=[]` 并启用 Recheck。
+
+每个 Watch 选择：
+
+`quantifier`
+- `each`：每次。
+- `every_3`：每 3 次。
+- `every_10`：每 10 次。
+- `custom`：只有预设明显不够时使用。
+
+`settle`
+- `immediate_0s`：立即稳定。
+- `normal_1s`：默认，安静 1 秒。
+- `settle_3s`：连续发言/多人汇报，安静 3 秒。
+- `custom`：特殊需求。
+
+Settle 是 quiet/debounce，不是“每条消息固定晚 N 秒执行”。等待期间该 Watch 新命中会重新计算安静期。
+
+### Recheck
+
+`recheck`：
+
+- `default_3m`：默认 3 分钟。
+- `ten_min`：10 分钟。
+- `thirty_min`：30 分钟。
+- `off`：无需无事件复查。
+- `custom`：特殊需求。
+
+Recheck 是低频活性兜底。它直接把 Program 标 dirty 并进入统一 AttentionKey 调度；它不是高频消息流，因此不再额外套 Watch 的 Settle。
+
+### Lease
+
+优先选 `10m`、`30m`、`2h`、`24h`；特殊情况再用 `custom`。不要创建永久职责。
+
+## 每次 Reconcile
+
+AttentionProgram 主动回合不是新的用户命令。
+
+按顺序：
+
+1. 读取当前 AstrBot 会话上下文和必要的正式工具/历史。
+2. 把 Watch/Recheck 原因只当成“可能值得重新看”的提示。
+3. 用当前世界重新判断 Goal。
+4. 有公开价值：行动或回复。
+5. 无公开价值：`yield_current_turn`。
+6. Goal 已完成：`manage_attention_program(cancel)` 净化 Program，再按需回复或沉默。
+
+运行期间又有新事件时，Runtime 不并发启动第二个同主体 Agent；只把 Program 再标 dirty，本轮结束后再 reconcile 一次。
 
 ## 常见组合
 
-- **盯住一个人**：`sender + each + normal_1s + default_3m`。
-- **对方连续讲话后再介入**：`sender + each + settle_3s`。
-- **群里再聊一阵我再看**：`any_message + every_10 + settle_3s`。
-- **出现某主题时再看**：`keyword + each + normal_1s`。
-- **没人叫我也定期回来检查**：`time_only + watchdog`。
-- **复杂实时协作**：条件监听为主，watchdog 为兜底；不要只靠定时轮询替代明确可监听的事件。
+**盯住一个人**
+- Goal：跟进其后续讨论并按当前语境判断是否介入。
+- Watch：`sender + each + normal_1s`
+- Recheck：默认 3 分钟。
 
-多个监听订单可能在相近时间就绪。Runtime 会在控制主体内统一归一化为一次主 Agent 激活；不要为每种条件手工设计独立回复流程。
+**连续讲话后再看**
+- Watch：`sender + each + settle_3s`
 
-## 每次主动激活后的动作
+**群里再聊一阵**
+- Watch：`any_message + every_10 + settle_3s`
 
-主动激活不是新的用户命令，也不是必须发言。重新检查当前上下文、开放目标和新事实。
+**多个入口指向同一件事**
+- Program Goal：同一个开放目标。
+- Watch A：指定成员。
+- Watch B：相关关键词。
+- 不要拆成两个独立 Program，除非它们确实是两个独立职责。
 
-若目标仍存在但此刻没有值得公开的内容，保留监听并调用 `yield_current_turn`。若目标完成，优先净化对应 `listener_id`；即使漏掉净化，后续 watchdog 再次醒来仍应重新判断并可沉默。
+**只定时复查**
+- `watches=[]`
+- Recheck：3/10/30 分钟之一。
 
-监听回合允许取消**自己拥有的监听订单**，用于正常收尾。它不能借此新增监听或扩大权限。
+## 控制与权限
 
-## 权限和真实性
-
-- 作用域来自当前事件，模型不能伪造群号。
-- AstrBot 管理员和当前群获授权操作员可以建立监听。
-- 未授权成员不能靠口头要求扩大未来可达性。
-- 收到 `status=ok` 前，不得声称监听已经生效。
-- 取消只能阻止尚未开始的未来激活；已经跨过 AstrBot 原生执行边界的在途 Agent 回合无法追回。
-- 监听只负责“何时重新获得判断机会”，事实检索仍应使用当前 AstrBot 已安装的 QQ 历史、网络、文件等正式工具。
+- 作用域来自当前事件，模型不能填写或伪造群号。
+- sender Watch 只接受可验证真实 QQ ID；昵称不能冒充 ID。
+- AstrBot 管理员和当前群获授权操作员可建立 Program。
+- 未授权成员不能通过口头要求扩大未来可达性。
+- 收到 `status=ok` 前不得声称 Program 已生效。
+- AttentionProgram 主动回合允许 cancel **自己拥有的 Program** 来正常收尾；不能借此新增或扩大 Program。
+- 取消只能阻止尚未开始的未来激活；已经跨过 AstrBot 原生 Agent 执行边界的在途回合不能追回。
+- Runtime 不把事件正文当持久业务数据库；事实查询继续使用 AstrBot 当前上下文、QQ 历史、文件、网络或其他正式工具。
 
 ## 兼容工具
 
-`manage_sender_activation`、`manage_sender_activation_rate` 与 `manage_heartbeat_lease` 保留兼容旧配置和高级控制。新的一般性开放目标优先使用 `manage_active_listener`，避免把“用户追踪”“计数”“定时检查”拆成多套平级心智模型。
+`manage_active_listener` 仅保留 rc1 兼容：一个旧 Listener 自动映射为一个 Program + 单 Watch；旧 `time_only` 映射为无 Watch + Recheck，旧 listener_id 保留为 program_id。
 
-`manage_attention_ignore` 用于有限期抑制已知对象造成的无价值激活；`manage_echo_hook` 是显式、有限、不可递归的一次性再检查钩子。它们不是统一监听的默认步骤。
+新开放目标优先使用 `manage_attention_program`。
 
-## 控制面与对话面
-
-监听、取消、限频、忽略、修复属于控制面；面向群成员的事实、协调、提醒和必要澄清属于对话面。不要把“我继续监听”“我在判断要不要结束”“兜底刚刚触发”等内部维护过程当成群聊内容。
+`manage_sender_activation`、`manage_sender_activation_rate`、`manage_heartbeat_lease`、`manage_attention_ignore`、`manage_echo_hook` 继续作为兼容/高级机制，不是 AttentionProgram 的默认组成步骤。
 
 一句话：
 
-`开放目标 → 设计注意条件 → Runtime 归一化信号 → 主 AI 再次醒来 → 行动 / 沉默 / 净化 → 继续或到期`
+`开放目标 → Program → Watch 世界 → mark dirty → single-flight Agent → Reconcile 当前世界 → Action / Yield / Done → Recheck / Lease`
