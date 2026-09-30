@@ -34,6 +34,19 @@ from .domain import DomainError, normalize_scope
 from .heartbeat_domain import HEARTBEAT_TAG, is_owned_heartbeat_payload
 from .heartbeat_gate import HeartbeatWakeGate
 from .heartbeat_service import HeartbeatService
+from .listener_service import (
+    LISTENER_BACKUP_KEY,
+    LISTENER_STATE_KEY,
+)
+from .attention_program_service import (
+    PROGRAM_BACKUP_KEY,
+    PROGRAM_EFFECT_CONTRACT,
+    PROGRAM_STATE_KEY,
+    EventEnvelope,
+    ProgramLimits,
+    AttentionProgramService,
+    is_owned_program_payload,
+)
 from .echo_service import (
     ECHO_EFFECT_CONTRACT,
     ECHO_TAG,
@@ -57,7 +70,7 @@ from .settings import PluginSettings
 from .storage import AstrBotKVStateStore
 
 PLUGIN_NAME = "astrbot_plugin_sender_activation"
-VERSION = "1.1.0-rc.19"
+VERSION = "1.3.0-rc.1"
 DECISION_EXTRA = "sender_activation_decision"
 RECOVERY_REPORT_EXTRA = "sender_activation_recovery_report"
 TURN_YIELD_EXTRA = "sender_activation_turn_yield"
@@ -71,6 +84,8 @@ _TOOL_EFFECT_CONTRACTS = {
     "manage_sender_activation": ACTIVATION_EFFECT_CONTRACT,
     "manage_sender_activation_rate": RATE_EFFECT_CONTRACT,
     "manage_heartbeat_lease": HEARTBEAT_EFFECT_CONTRACT,
+    "manage_active_listener": PROGRAM_EFFECT_CONTRACT,
+    "manage_attention_program": PROGRAM_EFFECT_CONTRACT,
     "yield_current_turn": "contextual_no_visible_reply_for_plugin_proactive_turn",
     "manage_attention_ignore": IGNORE_EFFECT_CONTRACT,
     "manage_echo_hook": ECHO_EFFECT_CONTRACT,
@@ -181,6 +196,76 @@ _TOOL_ERROR_POLICIES: dict[str, tuple[str, str, bool]] = {
         "query_heartbeat_then_retry",
         False,
     ),
+    "listener_scheduler_unavailable": (
+        "host_capability",
+        "enable_native_active_agent_scheduler",
+        False,
+    ),
+    "listener_service_inactive": (
+        "host_capability",
+        "inspect_listener_health",
+        False,
+    ),
+    "listener_storage_unavailable": (
+        "storage",
+        "inspect_listener_storage",
+        False,
+    ),
+    "listener_storage_write_failed": (
+        "storage",
+        "retry_after_listener_storage_recovery",
+        True,
+    ),
+    "listener_commit_indeterminate": (
+        "storage",
+        "reload_and_inspect_listener_state",
+        False,
+    ),
+    "listener_scope_capacity_exceeded": (
+        "capacity",
+        "cancel_unused_listeners_or_raise_limit",
+        False,
+    ),
+    "listener_total_capacity_exceeded": (
+        "capacity",
+        "cancel_unused_listeners_or_raise_limit",
+        False,
+    ),
+    "program_scheduler_unavailable": (
+        "host_capability",
+        "enable_native_active_agent_scheduler",
+        False,
+    ),
+    "program_service_inactive": (
+        "host_capability",
+        "inspect_program_runtime_health",
+        False,
+    ),
+    "program_storage_unavailable": (
+        "storage",
+        "inspect_program_storage",
+        False,
+    ),
+    "program_storage_write_failed": (
+        "storage",
+        "retry_after_program_storage_recovery",
+        True,
+    ),
+    "program_commit_indeterminate": (
+        "storage",
+        "reload_and_inspect_program_state",
+        False,
+    ),
+    "program_scope_capacity_exceeded": (
+        "capacity",
+        "cancel_unused_programs_or_raise_limit",
+        False,
+    ),
+    "program_total_capacity_exceeded": (
+        "capacity",
+        "cancel_unused_programs_or_raise_limit",
+        False,
+    ),
     "yield_not_available": (
         "state_precondition",
         "reply_normally_or_wait_for_plugin_proactive_turn",
@@ -280,6 +365,8 @@ def _tool_error(error: DomainError, tool: str) -> str:
         "attention_commit_indeterminate",
         "native_cron_update_indeterminate",
         "heartbeat_preflight_update_indeterminate",
+        "listener_commit_indeterminate",
+        "program_commit_indeterminate",
     }
     return _json(
         {
@@ -330,6 +417,37 @@ class AttentionGuardFilter(CustomFilter):
             if not plugin.service.storage_ready:
                 return False
             return bool(plugin.service.preview(scope, sender_id).admitted)
+        except Exception:
+            return False
+
+
+class AttentionProgramFilter(CustomFilter):
+    """Low-cost event sensor. Matching only emits a signal; it never wakes the Agent directly."""
+
+    def filter(self, event: AstrMessageEvent, cfg: Any) -> bool:
+        try:
+            plugin = _ACTIVE_PLUGIN
+            if plugin is None or not plugin.program_service.active:
+                return False
+            if event.get_platform_name() != "aiocqhttp" or event.is_private_chat():
+                return False
+            if event.is_at_or_wake_command:
+                return False
+            if event.get_extra(ATTENTION_IGNORED_EXTRA):
+                return False
+            sender_id = str(event.get_sender_id() or "").strip()
+            self_id = str(event.get_self_id() or "").strip()
+            if not sender_id or (self_id and sender_id == self_id):
+                return False
+            scope = event.unified_msg_origin
+            session_status = plugin.session_gate.read_sync(scope)
+            if session_status.enabled is False:
+                return False
+            return plugin.program_service.has_match(
+                scope,
+                sender_id,
+                getattr(event, "message_str", ""),
+            )
         except Exception:
             return False
 
@@ -436,6 +554,21 @@ class SenderActivationPlugin(Star):
             AstrBotCronAdapter(context, active_execution_enabled=False),
             self.heartbeat_wake_gate,
         )
+        self.program_service = AttentionProgramService(
+            ProgramLimits(),
+            AstrBotKVStateStore(
+                self,
+                state_key=PROGRAM_STATE_KEY,
+                backup_key=PROGRAM_BACKUP_KEY,
+            ),
+            getattr(context, "cron_manager", None),
+            legacy_store=AstrBotKVStateStore(
+                self,
+                state_key=LISTENER_STATE_KEY,
+                backup_key=LISTENER_BACKUP_KEY,
+            ),
+            preflight=self._program_preflight,
+        )
         self.activation_reservations = ActivationReservationCoordinator(
             self.settings.activation_min_interval_seconds,
             max_slots=self.settings.limits.max_targets_total,
@@ -462,6 +595,13 @@ class SenderActivationPlugin(Star):
         except DomainError as exc:
             logger.warning(
                 "[sender_activation] heartbeat_inert error=%s",
+                exc.code,
+            )
+        try:
+            await self.program_service.initialize()
+        except DomainError as exc:
+            logger.warning(
+                "[sender_activation] attention_program_inert error=%s",
                 exc.code,
             )
         self._register_web_apis()
@@ -493,6 +633,12 @@ class SenderActivationPlugin(Star):
             logger.warning(
                 "[sender_activation] heartbeat_shutdown_failures count=%d",
                 len(heartbeat_failures),
+            )
+        program_failures = await self.program_service.terminate()
+        if program_failures:
+            logger.warning(
+                "[sender_activation] attention_program_shutdown_failures count=%d",
+                len(program_failures),
             )
         await self.attention_service.terminate()
         await self.service.terminate()
@@ -526,6 +672,18 @@ class SenderActivationPlugin(Star):
             "管理复用 AstrBot 原生 Cron 的有限期心跳租约",
         )
         self.context.register_web_api(
+            f"{API_PREFIX}/program",
+            self._web_program,
+            ["POST"],
+            "管理 AttentionProgram：Goal、Watch、Recheck 与 Lease",
+        )
+        self.context.register_web_api(
+            f"{API_PREFIX}/listener",
+            self._web_listener,
+            ["POST"],
+            "兼容 rc1 统一监听接口；底层映射为 AttentionProgram",
+        )
+        self.context.register_web_api(
             f"{API_PREFIX}/access",
             self._web_access,
             ["POST"],
@@ -546,6 +704,7 @@ class SenderActivationPlugin(Star):
         access = self.access_service.snapshot()
         attention = self.attention_service.snapshot()
         echo = await self._safe_echo_snapshot()
+        programs = await self.program_service.snapshot()
         scope_map: dict[str, str] = {}
         for scope in [
             *state["known_scopes"],
@@ -553,6 +712,7 @@ class SenderActivationPlugin(Star):
             *access["known_scopes"],
             *attention["known_scopes"],
             *echo["raw_scopes"],
+            *programs["raw_scopes"],
         ]:
             reference = self.service.scope_ref(scope)
             if reference in scope_map and scope_map[reference] != scope:
@@ -592,6 +752,12 @@ class SenderActivationPlugin(Star):
         return status.enabled is not False
 
     async def _heartbeat_preflight(self, scope: str) -> bool:
+        if self._terminated:
+            return False
+        status = await self._session_status(scope)
+        return status.enabled is not False
+
+    async def _program_preflight(self, scope: str) -> bool:
         if self._terminated:
             return False
         status = await self._session_status(scope)
@@ -638,6 +804,8 @@ class SenderActivationPlugin(Star):
         )
         attention = self.attention_service.snapshot(scope=scope)
         echo = await self._safe_echo_snapshot(scope=scope)
+        programs = await self.program_service.snapshot(scope=scope)
+        listeners = await self.program_service.legacy_listener_snapshot(scope=scope)
         if scope is None:
             source = {
                 **source,
@@ -649,6 +817,8 @@ class SenderActivationPlugin(Star):
             heartbeat["heartbeat_leases"] = []
             attention["ignore_policies"] = []
             echo["echo_hooks"] = []
+            programs["programs"] = []
+            listeners["listeners"] = []
 
         def project(row: dict[str, Any]) -> dict[str, Any]:
             result = dict(row)
@@ -667,6 +837,10 @@ class SenderActivationPlugin(Star):
             "heartbeat_quarantined": heartbeat["quarantined"],
             "echo_hooks": echo["echo_hooks"],
             "echo_quarantined": echo["quarantined"],
+            "programs": [project(row) for row in programs["programs"]],
+            "program_quarantined": programs["quarantined"],
+            "listeners": [project(row) for row in listeners["listeners"]],
+            "listener_quarantined": listeners["quarantined"],
             "known_scopes": sorted(await self._page_scope_map()),
         }
 
@@ -677,7 +851,11 @@ class SenderActivationPlugin(Star):
         payload = event.get_extra("cron_payload")
         if not isinstance(payload, dict):
             return None
-        if is_owned_echo_payload(payload) or is_owned_heartbeat_payload(payload):
+        if (
+            is_owned_echo_payload(payload)
+            or is_owned_heartbeat_payload(payload)
+            or is_owned_program_payload(payload)
+        ):
             return payload
         return None
 
@@ -737,6 +915,8 @@ class SenderActivationPlugin(Star):
             "manage_sender_activation",
             "manage_sender_activation_rate",
             "manage_heartbeat_lease",
+            "manage_active_listener",
+            "manage_attention_program",
             "manage_attention_ignore",
             "manage_echo_hook",
         )
@@ -792,6 +972,8 @@ class SenderActivationPlugin(Star):
         payload = event.get_extra("cron_payload")
         if isinstance(payload, dict) and is_owned_echo_payload(payload):
             return "echo"
+        if isinstance(payload, dict) and is_owned_program_payload(payload):
+            return "attention_program"
         if event.get_extra(DECISION_EXTRA):
             return "sender_activation"
         if (
@@ -809,7 +991,7 @@ class SenderActivationPlugin(Star):
     def _echo_source_allowed(self, source: str) -> bool:
         if source == "native_wake":
             return self.settings.echo_allow_native_wake_source
-        if source == "sender_activation":
+        if source in {"sender_activation", "attention_program"}:
             return self.settings.echo_allow_sender_activation_source
         if source == "heartbeat":
             return self.settings.echo_allow_heartbeat_source
@@ -827,7 +1009,7 @@ class SenderActivationPlugin(Star):
         blocked = report["blocked_operation_tools"]
         text = (
             "[插件授权事实] 当前发送者已由 AstrBot 管理员授予本群的插件操作员"
-            "权限。若其自然语言明确要求改变对象激活、限频或心跳状态，请结合"
+            "权限。若其自然语言明确要求改变 AttentionProgram、对象激活、限频或心跳状态，请结合"
             "完整语境调用相应正式工具；不需要其拥有 AstrBot 超级管理员权限。"
             "授权不等于强制调用，否定、引用、假设和纯讨论仍有否决权。"
         )
@@ -871,6 +1053,54 @@ class SenderActivationPlugin(Star):
             logger.debug("[sender_activation] attention_guard_inert code=%s", exc.code)
         except Exception:
             logger.exception("[sender_activation] attention_guard_failed")
+
+    @filter.custom_filter(AttentionProgramFilter, priority=2500)
+    async def observe_attention_program_signal(self, event: AstrMessageEvent) -> None:
+        """Adapt one AstrBot message into an EventEnvelope and mark Programs dirty."""
+        try:
+            if event.get_extra(ATTENTION_IGNORED_EXTRA):
+                return
+            scope = self._scope(event)
+            sender_id = self._sender(event)
+            message_obj = getattr(event, "message_obj", None)
+            message_id = str(getattr(message_obj, "message_id", "") or "").strip()
+            occurred_raw = getattr(message_obj, "timestamp", None)
+            observed_at = time.time()
+            try:
+                occurred_at = float(occurred_raw) if occurred_raw is not None else None
+            except (TypeError, ValueError, OverflowError):
+                occurred_at = None
+            if not message_id:
+                # Prefer false-negative dedupe over suppressing a legitimate repeated
+                # message when the adapter failed to provide a stable event id.
+                # The object identity keeps duplicate handling of the same in-process
+                # event stable without pretending identical text is the same event.
+                material = (
+                    f"{scope}|{sender_id}|{occurred_at}|{id(message_obj)}|"
+                    f"{getattr(event, 'message_str', '')}"
+                )
+                message_id = hashlib.sha256(material.encode("utf-8")).hexdigest()
+            envelope = EventEnvelope(
+                id=message_id,
+                source=f"astrbot://aiocqhttp/{self.service.scope_ref(scope)}",
+                type="com.astrbot.qq.group.message",
+                subject=sender_id,
+                occurred_at=occurred_at,
+                observed_at=observed_at,
+                payload_ref=message_id,
+                data={"message": getattr(event, "message_str", "")},
+            )
+            await self.program_service.observe_event(
+                scope=scope,
+                envelope=envelope,
+            )
+        except DomainError as exc:
+            logger.debug(
+                "[sender_activation] attention_program_signal_inert code=%s",
+                exc.code,
+            )
+        except Exception:
+            logger.exception("[sender_activation] attention_program_signal_failed")
 
     @filter.custom_filter(SenderActivationFilter, priority=2000)
     async def activate_native_agent(self, event: AstrMessageEvent) -> None:
@@ -1049,6 +1279,8 @@ class SenderActivationPlugin(Star):
         payload = event.get_extra("cron_payload")
         if isinstance(payload, dict) and is_owned_echo_payload(payload):
             return "echo"
+        if isinstance(payload, dict) and is_owned_program_payload(payload):
+            return "attention_program"
         if event.get_extra(DECISION_EXTRA):
             return "sender_activation"
         if (
@@ -1334,6 +1566,177 @@ class SenderActivationPlugin(Star):
                 tool,
             )
 
+    @filter.llm_tool(name="manage_attention_program")
+    async def manage_attention_program(
+        self,
+        event: AstrMessageEvent,
+        action: str = "",
+        program_ids: list[str] | None = None,
+        goal: str = "",
+        watches: list[dict[str, Any]] | None = None,
+        recheck: str = "default_3m",
+        recheck_seconds: float = 0,
+        lease: str = "2h",
+        lease_seconds: int = 0,
+    ) -> str:
+        """管理 AI 的 AttentionProgram。Program 表示一个尚未完成的开放目标；Watch 只负责把世界变化标记为 dirty，主 Agent 每次醒来都重新读取当前世界并 reconcile，而不是执行旧命令。create/update 使用完整期望状态，cancel 结束，list 查询。
+
+        Args:
+            action(string): create、update、cancel 或 list。
+            program_ids(array[string]): update 必须且只能填一个 Program ID；cancel 可填多个；create/list 留空。
+            goal(string): 每次重新醒来后要基于当前世界重新判断的开放目标，不要写固定未来台词。
+            watches(array[object]): Watch 数组，最多 8 个。每项格式：{"match":{"type":"sender|keyword|any_message","values":["..."]},"quantifier":"each|every_3|every_10|custom","quantifier_count":0,"settle":"immediate_0s|normal_1s|settle_3s|custom","settle_seconds":0}。sender 的 values 填真实数字 QQ ID；keyword 填关键词；any_message 的 values 为空。可传空数组，此时必须启用 Recheck。
+            recheck(string): 无外界事件时最迟多久也重新检查一次。default_3m=3 分钟；ten_min=10 分钟；thirty_min=30 分钟；off=关闭；custom=使用 recheck_seconds。
+            recheck_seconds(number): 仅 recheck=custom 时填写。
+            lease(string): Program 有效期：10m、30m、2h、24h 或 custom。
+            lease_seconds(number): 仅 lease=custom 时填写，最长 7 天。
+        """
+        tool = "manage_attention_program"
+        try:
+            scope = self._scope(event)
+            actor = self._actor(event)
+            action_name = str(action or "").strip().lower()
+            try:
+                authorization_basis = self.access_service.authorize(
+                    actor=actor,
+                    scope=scope,
+                    capability="activation",
+                    action=action_name,
+                )
+            except DomainError as auth_error:
+                if (
+                    auth_error.code == "operator_access_required"
+                    and actor.proactive_source == "attention_program"
+                    and action_name == "cancel"
+                    and self.program_service.owns_all(
+                        scope=scope,
+                        controller_sender_id=actor.sender_id,
+                        program_ids=program_ids,
+                    )
+                ):
+                    authorization_basis = "attention_program_self_maintenance"
+                else:
+                    raise
+            if action_name in {"create", "update"}:
+                await self._require_new_state_allowed(scope)
+            result = await self.program_service.manage(
+                scope=scope,
+                action=action_name,
+                controller_sender_id=actor.sender_id,
+                actor_ref=actor.actor_ref,
+                program_ids=program_ids,
+                goal=goal,
+                watches=watches,
+                recheck=recheck,
+                recheck_seconds=recheck_seconds,
+                lease=lease,
+                lease_seconds=lease_seconds,
+            )
+            result["tool"] = tool
+            result["authorization_basis"] = authorization_basis
+            return _json(result)
+        except DomainError as exc:
+            return _tool_error(exc, tool)
+        except Exception as exc:
+            logger.exception("[sender_activation] attention_program_tool_failed")
+            return _tool_error(
+                DomainError("internal_error", f"工具执行失败: {type(exc).__name__}"),
+                tool,
+            )
+
+    @filter.llm_tool(name="manage_active_listener")
+    async def manage_active_listener(
+        self,
+        event: AstrMessageEvent,
+        action: str = "",
+        listener_ids: list[str] | None = None,
+        condition_kind: str = "",
+        condition_values: list[str] | None = None,
+        frequency: str = "each",
+        frequency_count: int = 0,
+        response_speed: str = "normal_1s",
+        settle_delay_seconds: float = 0,
+        watchdog: str = "default_3m",
+        watchdog_seconds: float = 0,
+        lifetime: str = "2h",
+        lifetime_seconds: int = 0,
+        goal: str = "",
+    ) -> str:
+        """兼容 rc1 的统一监听工具。新开放目标优先使用 manage_attention_program；本工具会把一个 Listener 无损映射为一个 Program + 单 Watch，time_only 映射为无 Watch + Recheck。
+
+        Args:
+            action(string): start、cancel 或 list。
+            listener_ids(array[string]): cancel 时填写旧 listener_id；迁移后它等于 program_id。
+            condition_kind(string): sender、keyword、any_message 或兼容 time_only。
+            condition_values(array[string]): sender 填真实数字 QQ ID；keyword 填关键词。
+            frequency(string): each、every_3、every_10 或 custom。
+            frequency_count(number): 仅 custom 使用。
+            response_speed(string): immediate_0s、normal_1s、settle_3s 或 custom。
+            settle_delay_seconds(number): 仅 custom 使用。
+            watchdog(string): default_3m、ten_min、thirty_min、off 或 custom。
+            watchdog_seconds(number): 仅 custom 使用。
+            lifetime(string): 10m、30m、2h、24h 或 custom。
+            lifetime_seconds(number): 仅 custom 使用。
+            goal(string): 每次醒来后重新判断的开放目标。
+        """
+        tool = "manage_active_listener"
+        try:
+            scope = self._scope(event)
+            actor = self._actor(event)
+            action_name = str(action or "").strip().lower()
+            try:
+                authorization_basis = self.access_service.authorize(
+                    actor=actor,
+                    scope=scope,
+                    capability="activation",
+                    action=action_name,
+                )
+            except DomainError as auth_error:
+                if (
+                    auth_error.code == "operator_access_required"
+                    and actor.proactive_source == "attention_program"
+                    and action_name == "cancel"
+                    and self.program_service.owns_all(
+                        scope=scope,
+                        controller_sender_id=actor.sender_id,
+                        program_ids=listener_ids,
+                    )
+                ):
+                    authorization_basis = "attention_program_self_maintenance"
+                else:
+                    raise
+            if action_name == "start":
+                await self._require_new_state_allowed(scope)
+            result = await self.program_service.manage_legacy_listener(
+                scope=scope,
+                action=action_name,
+                owner_sender_id=actor.sender_id,
+                actor_ref=actor.actor_ref,
+                condition_kind=condition_kind,
+                condition_values=condition_values,
+                frequency=frequency,
+                frequency_count=frequency_count,
+                response_speed=response_speed,
+                settle_delay_seconds=settle_delay_seconds,
+                watchdog=watchdog,
+                watchdog_seconds=watchdog_seconds,
+                lifetime=lifetime,
+                lifetime_seconds=lifetime_seconds,
+                goal=goal,
+                listener_ids=listener_ids,
+            )
+            result["tool"] = tool
+            result["authorization_basis"] = authorization_basis
+            return _json(result)
+        except DomainError as exc:
+            return _tool_error(exc, tool)
+        except Exception as exc:
+            logger.exception("[sender_activation] listener_compat_tool_failed")
+            return _tool_error(
+                DomainError("internal_error", f"工具执行失败: {type(exc).__name__}"),
+                tool,
+            )
+
     @filter.llm_tool(name="manage_heartbeat_lease")
     async def manage_heartbeat_lease(
         self,
@@ -1397,7 +1800,7 @@ class SenderActivationPlugin(Star):
         event: AstrMessageEvent,
         reason: str = "",
     ) -> str | None:
-        """仅在本插件对象激活、心跳或回响额外唤醒的当前 Agent 回合中，结构化结束本轮且不发送可见回复。沉默只约束公开输出，不等于禁止控制面工具：可先在前一个工具选择中设置有限忽略/清理状态，再在后续最终工具选择中把本工具作为唯一调用结束本轮。普通 @、原生会话或其他插件唤醒不可用。详细规则见 group-duty-orchestration Skill。
+        """仅在本插件对象激活、AttentionProgram、心跳或回响额外唤醒的当前 Agent 回合中，结构化结束本轮且不发送可见回复。沉默只约束公开输出，不等于禁止控制面工具：可先在前一个工具选择中设置有限忽略/清理状态，再在后续最终工具选择中把本工具作为唯一调用结束本轮。普通 @、原生会话或其他插件唤醒不可用。详细规则见 group-duty-orchestration Skill。
 
         Args:
             reason(string): 可选的简短语境理由，不面向群聊显示。
@@ -1423,12 +1826,26 @@ class SenderActivationPlugin(Star):
                 },
             )
             event.set_extra("enable_streaming", False)
+            if source == "attention_program":
+                payload = event.get_extra("cron_payload")
+                tag = payload.get(PROGRAM_TAG) if isinstance(payload, dict) else None
+                program_ids = tag.get("program_ids") if isinstance(tag, dict) else None
+                if isinstance(program_ids, list):
+                    try:
+                        await self.program_service.record_turn_outcome(
+                            program_ids=[str(value) for value in program_ids],
+                            outcome="yield",
+                        )
+                    except Exception:
+                        logger.debug(
+                            "[sender_activation] temporal_trace_yield_record_failed",
+                            exc_info=True,
+                        )
             self._yield_count += 1
             logger.info(
                 "[sender_activation] turn_yield outcome=turn_yield_accepted source=%s",
                 source,
             )
-
 
             return None
         except DomainError as exc:
@@ -1462,6 +1879,7 @@ class SenderActivationPlugin(Star):
                 **self.attention_service.health(),
                 **await self.heartbeat_service.health(),
                 **await self.echo_service.health(),
+                **await self.program_service.health(),
                 **self.activation_reservations.health(),
                 "turn_yield_count": self._yield_count,
             }
@@ -1592,6 +2010,93 @@ class SenderActivationPlugin(Star):
             return error_response(exc.message, status_code=status, data=exc.as_dict())
         except Exception as exc:
             logger.exception("[sender_activation] heartbeat_web_failed")
+            return error_response(
+                f"内部错误: {type(exc).__name__}",
+                status_code=500,
+            )
+
+    async def _web_program(self):
+        body = await request.json(default={})
+        if not isinstance(body, dict):
+            return error_response("请求体必须是 JSON 对象。", status_code=400)
+        try:
+            self._require_active_web()
+            scope = await self._resolve_page_scope(body.get("scope_ref"))
+            action = str(body.get("action") or "").strip().lower()
+            actor = self._dashboard_actor()
+            self.access_service.authorize(
+                actor=actor,
+                scope=scope,
+                capability="activation",
+                action=action,
+            )
+            if action in {"create", "update"}:
+                await self._require_new_state_allowed(scope)
+            result = await self.program_service.manage(
+                scope=scope,
+                action=action,
+                controller_sender_id=body.get("controller_sender_id"),
+                actor_ref=actor.actor_ref,
+                program_ids=body.get("program_ids", []),
+                goal=body.get("goal", ""),
+                watches=body.get("watches", []),
+                recheck=body.get("recheck", "default_3m"),
+                recheck_seconds=body.get("recheck_seconds", 0),
+                lease=body.get("lease", "2h"),
+                lease_seconds=body.get("lease_seconds", 0),
+            )
+            return json_response(result)
+        except DomainError as exc:
+            status = 503 if exc.code.endswith("unavailable") else 400
+            return error_response(exc.message, status_code=status, data=exc.as_dict())
+        except Exception as exc:
+            logger.exception("[sender_activation] attention_program_web_failed")
+            return error_response(
+                f"内部错误: {type(exc).__name__}",
+                status_code=500,
+            )
+
+    async def _web_listener(self):
+        body = await request.json(default={})
+        if not isinstance(body, dict):
+            return error_response("请求体必须是 JSON 对象。", status_code=400)
+        try:
+            self._require_active_web()
+            scope = await self._resolve_page_scope(body.get("scope_ref"))
+            action = str(body.get("action") or "").strip().lower()
+            actor = self._dashboard_actor()
+            self.access_service.authorize(
+                actor=actor,
+                scope=scope,
+                capability="activation",
+                action=action,
+            )
+            if action == "start":
+                await self._require_new_state_allowed(scope)
+            result = await self.program_service.manage_legacy_listener(
+                scope=scope,
+                action=action,
+                owner_sender_id=body.get("owner_sender_id"),
+                actor_ref=actor.actor_ref,
+                condition_kind=body.get("condition_kind", ""),
+                condition_values=body.get("condition_values", []),
+                frequency=body.get("frequency", "each"),
+                frequency_count=body.get("frequency_count", 0),
+                response_speed=body.get("response_speed", "normal_1s"),
+                settle_delay_seconds=body.get("settle_delay_seconds", 0),
+                watchdog=body.get("watchdog", "default_3m"),
+                watchdog_seconds=body.get("watchdog_seconds", 0),
+                lifetime=body.get("lifetime", "2h"),
+                lifetime_seconds=body.get("lifetime_seconds", 0),
+                goal=body.get("goal", ""),
+                listener_ids=body.get("listener_ids", []),
+            )
+            return json_response(result)
+        except DomainError as exc:
+            status = 503 if exc.code.endswith("unavailable") else 400
+            return error_response(exc.message, status_code=status, data=exc.as_dict())
+        except Exception as exc:
+            logger.exception("[sender_activation] listener_compat_web_failed")
             return error_response(
                 f"内部错误: {type(exc).__name__}",
                 status_code=500,

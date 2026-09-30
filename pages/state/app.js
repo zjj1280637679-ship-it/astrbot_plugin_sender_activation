@@ -7,6 +7,7 @@ const elements = {
   storage: document.getElementById("storage-status"),
   activations: document.getElementById("activation-count"),
   rates: document.getElementById("rate-count"),
+  programs: document.getElementById("program-count"),
   heartbeats: document.getElementById("heartbeat-count"),
   accessCount: document.getElementById("access-count"),
   quarantine: document.getElementById("quarantine-count"),
@@ -30,6 +31,18 @@ const elements = {
   accessTableWrap: document.getElementById("access-table-wrap"),
   accessRowCount: document.getElementById("access-row-count"),
   accessEmpty: document.getElementById("access-empty"),
+  programForm: document.getElementById("program-form"),
+  programController: document.getElementById("program-controller"),
+  programRecheck: document.getElementById("program-recheck"),
+  programLease: document.getElementById("program-lease"),
+  programGoal: document.getElementById("program-goal"),
+  programWatches: document.getElementById("program-watches"),
+  programAddWatch: document.getElementById("program-add-watch"),
+  programNoWatch: document.getElementById("program-no-watch"),
+  programRows: document.getElementById("program-rows"),
+  programTableWrap: document.getElementById("program-table-wrap"),
+  programRowCount: document.getElementById("program-row-count"),
+  programEmpty: document.getElementById("program-empty"),
   activationForm: document.getElementById("activation-form"),
   activationAction: document.getElementById("activation-action"),
   activationTargets: document.getElementById("activation-targets"),
@@ -136,6 +149,12 @@ function parseTargets(value) {
   );
 }
 
+function parseDelimitedValues(value) {
+  return [...new Set(value.split(/[,，\n]+/).map((item) => item.trim()))].filter(
+    Boolean,
+  );
+}
+
 function selectedScope() {
   return elements.scopeSelect.value;
 }
@@ -181,6 +200,11 @@ function outcomeMessage(result, fallback) {
       "rateAlreadyAbsent",
       "目标原本没有额外激活限频。",
     ),
+    attention_program_created: t("programCreated", "Attention Program 已建立。"),
+    attention_program_updated: t("programUpdated", "Attention Program 已更新。"),
+    attention_programs_cancelled: t("programCancelled", "Attention Program 已结束。"),
+    listener_started: t("listenerStarted", "兼容监听已建立。"),
+    listeners_cancelled: t("listenersCancelled", "兼容监听已取消。"),
     heartbeat_created: t("heartbeatCreated", "心跳租约已建立。"),
     heartbeat_renewed: t("heartbeatRenewed", "心跳租约已续期。"),
     heartbeat_disabled: t("heartbeatDisabled", "心跳租约已终止。"),
@@ -330,6 +354,205 @@ function renderRecoveryReports(payload) {
   elements.recoveryCount.textContent = `${reports.length} ${t("rows", "条")}`;
   elements.recoveryEmpty.style.display = reports.length ? "none" : "block";
   elements.recoveryTableWrap.style.display = reports.length ? "block" : "none";
+}
+
+function watchKindLabel(kind) {
+  return {
+    sender: "指定用户",
+    keyword: "关键词",
+    any_message: "任意消息",
+  }[kind] || kind;
+}
+
+function createOption(value, label, selectedValue) {
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = label;
+  option.selected = value === selectedValue;
+  return option;
+}
+
+function syncWatchValues(card) {
+  const kind = card.querySelector(".watch-kind").value;
+  const input = card.querySelector(".watch-values");
+  const needsValues = kind === "sender" || kind === "keyword";
+  input.disabled = !needsValues;
+  input.required = needsValues;
+  input.placeholder =
+    kind === "sender"
+      ? "真实 QQ ID；多个用逗号分隔"
+      : kind === "keyword"
+        ? "关键词；多个用逗号分隔"
+        : "任意消息无需填写";
+  if (!needsValues) input.value = "";
+}
+
+function addWatchEditor(initial = {}) {
+  const card = document.createElement("div");
+  card.className = "watch-card";
+
+  const kindLabel = document.createElement("label");
+  const kindTitle = document.createElement("span");
+  kindTitle.textContent = "关注什么";
+  const kind = document.createElement("select");
+  kind.className = "watch-kind";
+  const initialKind = initial.match_kind || initial.kind || "sender";
+  kind.append(
+    createOption("sender", "指定用户", initialKind),
+    createOption("keyword", "关键词", initialKind),
+    createOption("any_message", "任意消息", initialKind),
+  );
+  kindLabel.append(kindTitle, kind);
+
+  const valuesLabel = document.createElement("label");
+  valuesLabel.className = "watch-values-label";
+  const valuesTitle = document.createElement("span");
+  valuesTitle.textContent = "条件值";
+  const values = document.createElement("input");
+  values.className = "watch-values";
+  values.type = "text";
+  values.autocomplete = "off";
+  values.value = (initial.match_values || initial.values || []).join(", ");
+  valuesLabel.append(valuesTitle, values);
+
+  const quantifierLabel = document.createElement("label");
+  const quantifierTitle = document.createElement("span");
+  quantifierTitle.textContent = "多少变化再看";
+  const quantifier = document.createElement("select");
+  quantifier.className = "watch-quantifier";
+  const quantifierCount = Number(initial.quantifier_count || 1);
+  const quantifierValue =
+    quantifierCount === 3 ? "every_3" : quantifierCount === 10 ? "every_10" : "each";
+  quantifier.append(
+    createOption("each", "每次", quantifierValue),
+    createOption("every_3", "每 3 次", quantifierValue),
+    createOption("every_10", "每 10 次", quantifierValue),
+  );
+  quantifierLabel.append(quantifierTitle, quantifier);
+
+  const settleLabel = document.createElement("label");
+  const settleTitle = document.createElement("span");
+  settleTitle.textContent = "安静多久再看";
+  const settle = document.createElement("select");
+  settle.className = "watch-settle";
+  const settleSeconds = Number(initial.settle_seconds ?? 1);
+  const settleValue =
+    settleSeconds === 0
+      ? "immediate_0s"
+      : settleSeconds === 3
+        ? "settle_3s"
+        : "normal_1s";
+  settle.append(
+    createOption("immediate_0s", "立即 · 0 秒", settleValue),
+    createOption("normal_1s", "普通 · 1 秒", settleValue),
+    createOption("settle_3s", "等这一波说完 · 3 秒", settleValue),
+  );
+  settleLabel.append(settleTitle, settle);
+
+  const removeWrap = document.createElement("div");
+  removeWrap.className = "watch-remove";
+  const remove = button("移除", "small danger", () => {
+    card.remove();
+    elements.programNoWatch.hidden = elements.programWatches.children.length > 0;
+  });
+  removeWrap.append(remove);
+
+  card.append(kindLabel, valuesLabel, quantifierLabel, settleLabel, removeWrap);
+  kind.addEventListener("change", () => syncWatchValues(card));
+  syncWatchValues(card);
+  elements.programWatches.append(card);
+  elements.programNoWatch.hidden = true;
+}
+
+function collectWatches() {
+  const watches = [];
+  for (const card of elements.programWatches.querySelectorAll(".watch-card")) {
+    const kind = card.querySelector(".watch-kind").value;
+    const rawValues = card.querySelector(".watch-values").value;
+    const values =
+      kind === "sender"
+        ? parseTargets(rawValues)
+        : kind === "keyword"
+          ? parseDelimitedValues(rawValues)
+          : [];
+    if ((kind === "sender" || kind === "keyword") && !values.length) {
+      throw new Error(t("watchValuesRequired", "每个用户/关键词 Watch 都必须填写条件值。"));
+    }
+    watches.push({
+      match: { type: kind, values },
+      quantifier: card.querySelector(".watch-quantifier").value,
+      settle: card.querySelector(".watch-settle").value,
+    });
+  }
+  return watches;
+}
+
+function programWatchSummary(program) {
+  const watches = program.watches || [];
+  if (!watches.length) return "无 Watch · 仅 Recheck";
+  return watches
+    .map((watch) => {
+      const values = (watch.match_values || []).join(", ");
+      const suffix = values ? `：${values}` : "";
+      return `${watchKindLabel(watch.match_kind)}${suffix} · ${watch.quantifier_count}次 · quiet ${watch.settle_seconds}s`;
+    })
+    .join("\n");
+}
+
+function programRecheckLabel(program) {
+  if (program.recheck_seconds == null) return t("off", "关闭");
+  const runtime = program.runtime || {};
+  const remaining = runtime.recheck_remaining_seconds;
+  return remaining == null
+    ? secondsLabel(program.recheck_seconds)
+    : `${secondsLabel(program.recheck_seconds)} / 下次 ${secondsLabel(remaining)}`;
+}
+
+function renderProgramRows(payload) {
+  const programs = payload.state.programs || [];
+  elements.programRows.replaceChildren();
+  for (const program of programs) {
+    const runtime = program.runtime || {};
+    const row = document.createElement("tr");
+    const generation =
+      `${runtime.dirty_generation || 0} / ${runtime.reconciled_generation || 0}` +
+      (runtime.dirty ? " · DIRTY" : "");
+    const values = [
+      program.program_id,
+      programWatchSummary(program),
+      programRecheckLabel(program),
+      secondsLabel(program.remaining_seconds),
+      generation,
+      program.goal,
+    ];
+    for (const value of values) {
+      const cell = document.createElement("td");
+      cell.textContent = value || "--";
+      row.append(cell);
+    }
+    const actions = document.createElement("td");
+    actions.className = "row-actions";
+    actions.append(
+      button(t("cancelProgram", "结束"), "small danger", async () => {
+        const confirmed = await requestConfirmation({
+          message: t("confirmProgramCancel", "确认结束这个 Attention Program？"),
+          scope: program.scope_ref,
+          targets: [program.program_id],
+          destructive: true,
+        });
+        if (!confirmed) return;
+        await postProgram("cancel", program.scope_ref, {
+          programIds: [program.program_id],
+        });
+      }),
+    );
+    row.append(actions);
+    elements.programRows.append(row);
+  }
+  elements.programRowCount.textContent =
+    `${programs.length} ${t("rows", "条")}`;
+  elements.programEmpty.style.display = programs.length ? "none" : "block";
+  elements.programTableWrap.style.display = programs.length ? "block" : "none";
 }
 
 function renderHeartbeatRows(payload) {
@@ -522,10 +745,16 @@ function render(payload) {
   currentPayload = payload;
   const health = payload.health;
   elements.versionLine.textContent = `v${payload.version}`;
-  if (!health.runtime_snapshot_ready) {
+  if (
+    !health.runtime_snapshot_ready ||
+    health.program_storage_ready === false
+  ) {
     elements.storage.textContent = t("unavailable", "不可用");
     elements.storage.style.color = "var(--danger)";
-  } else if (!health.storage_write_healthy) {
+  } else if (
+    !health.storage_write_healthy ||
+    health.program_storage_write_healthy === false
+  ) {
     elements.storage.textContent = t("writeDegraded", "快照可用，写入异常");
     elements.storage.style.color = "var(--danger)";
   } else {
@@ -534,11 +763,13 @@ function render(payload) {
   }
   elements.activations.textContent = String(health.activation_count);
   elements.rates.textContent = String(health.rate_count);
+  elements.programs.textContent = String(health.program_count || 0);
   elements.heartbeats.textContent = String(health.heartbeat_count || 0);
   elements.accessCount.textContent = String(health.access_grant_count || 0);
   elements.quarantine.textContent = String(
     (health.quarantined_count || 0) +
-      (health.heartbeat_quarantined_count || 0),
+      (health.heartbeat_quarantined_count || 0) +
+      (health.program_quarantined_count || 0),
   );
   renderHostConfig(payload);
   renderToolPermissions(payload);
@@ -546,6 +777,7 @@ function render(payload) {
   renderAccessRows(payload);
   renderRows(payload);
   renderRecoveryReports(payload);
+  renderProgramRows(payload);
   renderHeartbeatRows(payload);
   elements.scopeRef.textContent = scopeRef(elements.scopeSelect.value);
   const session = payload.session_status || {
@@ -583,6 +815,28 @@ async function refresh() {
   } finally {
     elements.refresh.disabled = false;
   }
+}
+
+async function postProgram(action, scopeRef, values = {}) {
+  const result = await bridge.apiPost("program", {
+    action,
+    scope_ref: scopeRef,
+    controller_sender_id: values.controllerSenderId || "",
+    program_ids: values.programIds || [],
+    goal: values.goal || "",
+    watches: values.watches || [],
+    recheck: values.recheck || "default_3m",
+    lease: values.lease || "2h",
+  });
+  notify(
+    outcomeMessage(
+      result,
+      result.changed
+        ? t("programChanged", "Attention Program 已更新。")
+        : t("noChange", "状态没有变化。"),
+    ),
+  );
+  await refresh();
 }
 
 async function postActivation(action, scopeRef, targetIds, durationSeconds) {
@@ -667,6 +921,8 @@ elements.scopeSelect.addEventListener("change", () => {
   refresh();
 });
 
+elements.programAddWatch.addEventListener("click", () => addWatchEditor());
+
 elements.activationAction.addEventListener("change", () => {
   elements.activationDuration.disabled =
     elements.activationAction.value === "disable";
@@ -712,6 +968,47 @@ elements.confirmationAccept.addEventListener("click", () => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements.confirmationLayer.hidden) {
     closeConfirmation(false);
+  }
+});
+
+elements.programForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const scope = requireScope();
+    const controller = elements.programController.value.trim();
+    if (!/^\d{5,20}$/.test(controller)) {
+      throw new Error(t("programControllerRequired", "请填写真实数字 QQ ID 作为控制主体。"));
+    }
+    const goal = elements.programGoal.value.trim();
+    if (!goal) {
+      throw new Error(t("programGoalRequired", "请填写开放目标。"));
+    }
+    const watches = collectWatches();
+    if (!watches.length && elements.programRecheck.value === "off") {
+      throw new Error(
+        t("programWakeSourceRequired", "没有 Watch 时必须启用无事件 Recheck。"),
+      );
+    }
+    const targets = watches.flatMap((watch) => watch.match.values || []);
+    const confirmed = await requestConfirmation({
+      message: t(
+        "confirmProgramCreate",
+        "确认建立这个 Attention Program？Watch 只会标记 dirty，真正醒来后 AI 会重新读取当前世界。",
+      ),
+      scope,
+      targets: targets.length ? targets : ["Recheck-only Program"],
+      destructive: false,
+    });
+    if (!confirmed) return;
+    await postProgram("create", scope, {
+      controllerSenderId: controller,
+      goal,
+      watches,
+      recheck: elements.programRecheck.value,
+      lease: elements.programLease.value,
+    });
+  } catch (error) {
+    notify(error.message || String(error), "error");
   }
 });
 
@@ -839,6 +1136,7 @@ function renderLocale() {
 
 await bridge.ready();
 renderLocale();
+addWatchEditor();
 elements.heartbeatAction.dispatchEvent(new Event("change"));
 bridge.onContext(() => {
   renderLocale();

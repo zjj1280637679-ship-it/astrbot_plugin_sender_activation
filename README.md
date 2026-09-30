@@ -1,18 +1,45 @@
 <h1 align="center">管理员的真理捍卫器</h1>
-<p align="center"><strong>用这款 AstrBot 插件，让你的 AI 获得限时免@的主动回复能力：该反驳就反驳，该沉默就沉默。</strong></p>
-<p align="center"><strong>让你的 AI 为你战斗到底。</strong></p>
+<p align="center"><strong>给 AstrBot 主 Agent 一套可持续、可约束、可撤销的未来行动权。</strong></p>
+<p align="center"><strong>不是被事件叫醒才存在，而是在有限职责中按自己的节奏持续判断世界。</strong></p>
 
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26.1-6b63ff)](https://github.com/AstrBotDevs/AstrBot)
 [![Platform](https://img.shields.io/badge/platform-aiocqhttp-2f855a)](https://docs.astrbot.app/en/dev/star/plugin-new.html)
 
-> **让该被追问的发言得到反驳，让没有增量的接话归于沉默。**
+> **Agent 不由事件驱动存在，而由职责驱动持续存在；事件只改变它所处的世界。**
 
-你只需任命一次，就能让 AstrBot 在限定时间内继续留在争论现场：持续关注或追踪群成员的后续发言，也可以用有限期心跳定时唤醒主 Agent，巡查当时可见的群聊上下文。发现错误信息、概念偷换、回避问题或其他需要澄清的不良发言时，由你的 AI 基于完整上下文主动反驳或接话；没有证据变化、逻辑缺口或其他有效增量时，让它主动沉默。等争论结束，撤销任务或让租期到点，一切自动恢复原状。
+从 `1.3.0-rc.1` 开始，项目的最高层定义是 **Public Self-Discipline Harness（公共自律 Harness）**。它不是替 AI 完成任务的工作流，而是给 AstrBot 主 Agent 提供未来行动权的基础设施：有限职责、内部节奏、外界筛选、单路归一化、主动沉默和可撤销退出。
 
-## 工程设想
+## v1.3 公共自律 Harness
 
-后续统一面板与 AI 工具的设计见 [群内有限激活程序：工程设想](docs/engineering_proposal.md)。文档按“需求—运行条件—插件策略—效果指标”整理，包含追踪参数、后台模块分工、验收场景与现有实现差距；属于设计草案。
+完整工程总纲见 [公共自律 Harness：工程总纲 vNext](docs/self_discipline_harness.md)。准备上真实 AstrBot/QQ 环境前，请按 [阶段进度与真实环境验收](docs/real_environment_candidate.md) 逐项测试。
+
+核心范式：
+
+- **职责驱动持续存在**：只要有限 Contract 仍然有效且未完成，就必须保留未来重新判断的可达性。
+- **内部节奏优先**：Recheck 提供内生持续性；AI 不需要等外界再次点名才“存在”。
+- **外界条件只做筛选输入**：Watch 只说明世界出现了相关变化，不直接命令 Agent 立刻行动。
+- **时间主权**：Settle 允许世界先稳定；运行期间的新变化只更新 tail/dirty，完成后重新走同一 trailing-settle 规则。
+- **一个我**：同一 AttentionKey 始终 single-flight，多种提醒最终只归一化成一个真正运行的 Turn。
+- **自由与策略分离**：Plugin 提供 Freedom Infrastructure，Skill 提供 Usage Policy，Agent 做情境判断。
+- **纵向自校正**：Trace 只留下时间戳、唤醒原因、Outcome 等客观轨迹，Skill 再引导 Agent 从时间序列发现自己的频率、重复和无效行为。
+
+`harness_core.py` 是纯 Python 内核，不导入 AstrBot、不使用 asyncio、不碰数据库；真实 AttentionProgram Runtime 已开始使用它处理 Watch 状态、WakeIntent、dirty generation 与 reconcile claim。AttentionProgram v2 存储 Schema 保持不变。
+
+## AttentionProgram / Reconcile Runtime
+
+详细 Program 工程契约继续见 [AttentionProgram / Reconcile Runtime](docs/engineering_proposal.md)。
+
+主入口是 `manage_attention_program`。AI 只需要理解六个高层句柄：
+
+- **Goal**：每次醒来后重新判断什么开放目标；
+- **Watch**：什么变化值得重新看，同一 Program 可配置多个；
+- **Quantifier**：每次、每 3 次、每 10 次或自定义；
+- **Settle**：立即、安静 1 秒、安静 3 秒或自定义；
+- **Recheck**：即使没事件，3/10/30 分钟后是否也重新检查；
+- **Lease**：这项职责最多持续多久。
+
+复杂度沉到底层：EventEnvelope 去重、dirty generation、AttentionKey、single-flight、restart reconcile 都不需要 AI 填。旧 `manage_active_listener` 继续兼容，一个旧 Listener 会映射成一个 Program + 单 Watch；旧 `time_only` 映射成无 Watch + Recheck。
 
 ## 你可能在找
 
@@ -25,21 +52,20 @@
 
 ## Skills-like 两阶段适配
 
-`1.1.0-rc.17` 针对 AstrBot 的 `Skills-like（两阶段）` 工具模式做了原生适配：
+`1.3.0-rc.1` 继续使用 AstrBot 的 `Skills-like（两阶段）` 工具模式：
 
-- 第一阶段只需要看到七个工具的短名称和精简用途，不再常驻整段执行手册；
+- 第一阶段只需要看到工具的短名称和精简用途，不再常驻整段执行手册；
 - 第二阶段在模型选中工具后再提供参数 Schema；
 - 插件复用并强化原有 `group-duty-orchestration` 原生 Skill，把对象关注、周期心跳、有限对象忽略、有限回响、操作员授权、限频与结构化沉默作为一个按需加载的职责编排手册；
 - 该 Skill 初始只暴露名称和触发描述，命中后才加载 `SKILL.md` 的详细流程与边界；
 - `Full（完整参数）` 模式继续兼容；rc17 已有五个工具的名称和参数保持兼容，rc19 另新增 `manage_attention_ignore` 与 `manage_echo_hook`。
 
-因此两阶段优化只改变**给模型展示说明的时机和密度**，不改变租约执行层。若人格明确配置为“不使用任何 Skills”，七个 Tool 仍可按 AstrBot 的工具模式正常工作，只是不再获得按需加载的 Skill 操作手册。
+因此两阶段优化只改变**给模型展示说明的时机和密度**，不改变租约执行层。若人格明确配置为“不使用任何 Skills”，Tool 仍可按 AstrBot 的工具模式正常工作，只是不再获得按需加载的 Skill 操作手册。
 
-> **rc19 候选说明：** `1.1.0-rc.19` 在 rc18 的真实回执契约上增加第一批注意力运行时能力：
-> 对象级有限 Ignore、对象计数/时间窗口触发 Ignore、可选有限 Echo，以及 Heartbeat/Echo 在主 Agent
-> 激活前的 SessionGate 预检。Ignore 与 Echo 默认都关闭，是否授予主 Agent 由部署者配置决定；
-> 程序不根据模型名称自动提权。当前仍不是“对象/时间/计数”的通用规则 DSL，也没有实现全量监听、
-> 时间-only Ignore 或通用 Count Activate。
+> **v1.3 初版说明：** `1.3.0-rc.1` 不改变 AttentionProgram v2 数据格式，而是把
+> Contract/Watch runtime、WakeIntent、GovernorDecision、dirty generation 与 reconcile claim
+> 抽到可独立测试的 `harness_core.py`。旧 Heartbeat/Echo/Sender Activation 暂未一次性重写，
+> 后续将作为 WakeIntent Adapter 逐步接入同一 Governor。
 
 > **运行边界：** 首版运行域严格等于 `aiocqhttp` 群聊。其他平台和私聊事件
 > 保持原样；若主 Agent 在这些语境调用管理工具，插件返回结构化不支持错误，
@@ -89,37 +115,36 @@ AstrBot 原生的 `@`、引用、唤醒词和命令可以可靠地唤醒主 Agen
 状态，就会产生“承诺与可达性错配”；模型被主动唤醒后若只能硬发一条文字，
 又会产生“看见却不能自然让出话轮”的错配。
 
-管理员的真理捍卫器只补充这些基础机制，不复制原生 Agent：
+管理员的真理捍卫器只补充未来行动权的基础设施，不复制原生 Agent。目标架构不再把 Sender/Heartbeat/Echo 视为长期平级能力，而是逐步归一化为：
 
 ```text
-M = A_native ∪ {I, H, L_i, N, E, Y}
+World / Time / Restart / Legacy Sources
+                 ↓
+             WakeIntent
+                 ↓
+      Public Self-Discipline Mechanisms
+                 ↓
+          single-lane Readiness
+                 ↓
+             ONE Turn
+                 ↓
+        Action / Yield / Done
+                 ↓
+       next cadence / Trace
 ```
 
-- `A_native`：AstrBot 原生 Agent、上下文、`@`、命令、主动回复与 Cron。
-- `I`：当前 UMO 与指定 QQ ID 组成的有限期额外激活租约。
-- `H`：当前 UMO 上复用 AstrBot 原生 Cron 的有限期时序激活租约。
-- `L_i`：只约束 `I` 所产生额外激活的可选、有限期限频租约。
-- `N`：部署者授权后，由主 Agent 管理的对象级有限 Ignore 策略；对象、计数与时间窗口可叠加。
-- `E`：显式可选、有限、不可递归的 Echo 主动再激活 Hook。
-- `Y`：仅在 `I/H/E` 新增的主动回合中，由主 Agent 正式选择无可见回复。
-
-生命周期闭环为：
-
-```text
-I/H 激活 -> 原生主 Agent 看现场 -> 行动或 Y 让出
-        -> 达成目标、人工撤销或有限期到期 -> 回到 A_native
-```
+当前旧 Sender Activation、Heartbeat、Echo、Ignore、Rate、Access 仍保留兼容运行路径；它们是迁移来源，不代表最终抽象。
 
 职责严格分离：
 
 ```text
 Decision = AstrBot 原生主 Agent 对完整语境的理解
-Execute  = 插件按正式工具帧维护 I、H、L_i 与当前回合 Y
+Execute  = 插件按正式工具帧维护 P、I、H、L_i 与当前回合 Y
 Fallback = 插件异常、状态损坏、明确停用或租约失效时回到 A_native
 ```
 
 插件不会把 AstrBot 超级管理员权限扩散给普通成员。管理员可以按当前群和
-QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插件的对象激活、
+QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插件的 AttentionProgram、对象激活、
 限频和心跳，不能配置 AstrBot、操作其他插件或跨群转授权。插件不判断谁
 掌握真理、何时必须反驳；主 Agent 可以根据新证据修正或结束租约。若插件自身
 崩溃或被宿主阻塞，失败语义只能是“不再新增唤醒”，不能阻断或改写原生路径。
@@ -130,12 +155,12 @@ QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插�
 | --- | --- |
 | 在代码中判定真理或给用户贴标签 | 判断必须来自完整语境、证据和主 Agent |
 | 内置事实库或替代网络检索 | 事实核验应复用独立、正式的信息工具 |
-| 因出现某个词就自动反驳 | 用户文本只能由主 Agent 高语境理解后转成正式工具帧 |
+| 因出现某个词就自动反驳 | 关键词可以作为监听条件，但只负责重新唤醒；是否反驳仍由主 Agent 高语境判断 |
 | 保证每条发言都得到回复 | 激活只增加判断机会，主 Agent 仍可沉默 |
 | 自建或选择大语言模型 | 主 Agent 与 Provider 生命周期由 AstrBot 负责 |
 | 限制原生 `@`、引用、命令或普通会话 | 限频只消费本插件新增的激活额度 |
 | 阻断、改写或保存消息内容 | 被替换的事件继续走原生流水线；预约器只保存时间、代次和唤醒信号 |
-| 自建调度器、Cron 数据库或第二套 Agent | 时序激活只适配 AstrBot 原生 Cron |
+| 另建持久 Cron 数据库或第二套 Agent | AttentionProgram 只维护短时 Watch/dirty 状态，真正激活仍交回 AstrBot 原生主 Agent |
 | 自动读取 QQ 新消息或历史记录 | 心跳只提供判断机会；信息能力需由主 Agent 组合现有工具 |
 | 对普通原生回合强制沉默 | `yield_current_turn` 只接受本插件新增的主动回合 |
 | 提供安全级 DDoS 防御 | 内存计数器是运营保护，重启后清零 |
@@ -161,15 +186,15 @@ QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插�
 | AstrBot 配置 | 对插件的影响 |
 | --- | --- |
 | `provider_settings.enable` | 必须开启；关闭后租约最多只能产生 wake 机会，主 Agent 不会运行 |
-| `provider_settings.agent_runner_type` | 首版只验收内置 `local` Agent；第三方 Agent 执行器不在正式支持范围 |
-| 当前对话模型的 `tool_use` 能力 | 必须具备，否则主 Agent 不能产生五个正式工具帧 |
+| `agent_runner.runner_type`（AstrBot 4.28+；旧版回退 `provider_settings.agent_runner_type`） | 首版只验收内置 `local` Agent；第三方 Agent 执行器不在正式支持范围 |
+| 当前对话模型的 `tool_use` 能力 | 必须具备，否则主 Agent 不能可靠建立、净化和维护监听状态 |
 | `provider_settings.show_tool_use_status=false` | 要实现完全无可见回复时应关闭；否则宿主可能先发送工具调用状态 |
 | `provider_settings.identifier`（用户识别） | 使用“我、本人、刚才那个人”等表达时应开启，使主 Agent 获得真实 User ID；插件事件层仍会读取 ID，但模型看不到就无法可靠填写 `target_ids` |
 | `provider_settings.wake_prefix`（LLM 额外唤醒前缀） | 要让租约命中的普通非前缀消息进入 Agent，必须留空；它不同于顶层普通唤醒词 |
 | `platform_settings.unique_session`（隔离会话） | 跨成员追踪必须关闭；开启后同一群不同成员使用不同 UMO，发令者建立的租约无法命中另一成员的消息 |
 | 白名单、原生 `platform_settings.rate_limit` | 仍在 AstrBot 原生流水线生效；插件默认不限频不等于关闭 AstrBot 原生限流 |
-| `plugin_set`、会话插件开关、独立工具开关 | 可分别让事件处理器或工具不可达，修改后必须核对五个工具仍可见 |
-| 操作工具的原生权限 | 获授权普通成员使用时，`manage_sender_activation`、`manage_sender_activation_rate`、`manage_heartbeat_lease` 必须为 `member`；插件再按当前群的授权表做指定 ID 校验 |
+| `plugin_set`、会话插件开关、独立工具开关 | 可分别让事件处理器或工具不可达，修改后必须核对所需工具仍可见 |
+| 操作工具的原生权限 | 获授权普通成员使用时，`manage_active_listener`、`manage_sender_activation`、`manage_sender_activation_rate`、`manage_heartbeat_lease` 必须为 `member`；插件再按当前群的授权表做指定 ID 校验 |
 
 `target_ids` 只接受真实数字 QQ ID，不接受 `current_sender`、昵称或其他占位符。
 插件页面会只读显示这些关键项的当前生效状态，不会替管理员修改 AstrBot
@@ -185,7 +210,7 @@ AstrBot 原生机制发生的私聊 Agent 请求中检测当前 UMO 的生效配
 
 1. 打开“插件管理”。
 2. 使用仓库 URL 安装，或上传经验证的精简运行 ZIP。
-3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.1.0-rc.17`。
+3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.2.0-rc.2`。
 4. 在插件配置中检查对象激活、心跳、容量和限频上限。
 5. 打开插件详情中的“管理员的真理捍卫器控制台”页面，确认 `storage_ready` 为 `true`。
 
@@ -219,6 +244,30 @@ https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation
 工具成功回执到达前，AI 不应声称任务已经生效。
 
 ## 工具
+
+### `manage_attention_program`（rc2 推荐入口）
+
+```text
+action: create | update | cancel | list
+program_ids: update/cancel 时使用
+
+goal: 每次醒来后重新判断的开放目标
+
+watches:
+  - match.type: sender | keyword | any_message
+    match.values: [...]
+    quantifier: each | every_3 | every_10 | custom
+    settle: immediate_0s | normal_1s | settle_3s | custom
+
+recheck: default_3m | ten_min | thirty_min | off | custom
+lease: 10m | 30m | 2h | 24h | custom
+```
+
+事件只是“可能值得重新计算”的提示。多个 Watch 命中只让 Program dirty；同一控制主体多个 Program 也由 AttentionKey 归一化成 single-flight Agent 回合。目标完成时按 `program_id` cancel；无公开价值时可 `yield_current_turn`。
+
+### `manage_active_listener`（rc1 兼容）
+
+旧参数保持可调用，但底层不再运行独立 Listener Runtime：一个旧 Listener 会写成一个 Program + 单 Watch；`time_only` 写成 `watches=[] + Recheck`，旧 listener_id 保留为 program_id，便于已有状态和旧提示继续收尾。
 
 ### `manage_sender_activation_access`
 
@@ -280,7 +329,7 @@ Cron 页面停用的任务不会被强行开启。
 reason: 可选的当前语境理由，不向群聊显示
 ```
 
-只允许由本插件对象激活或心跳产生的当前主动回合调用。成功后使用 AstrBot
+只允许由本插件 AttentionProgram、对象激活、心跳或回响产生的当前主动回合调用。成功后使用 AstrBot
 本地工具的终结返回直接结束当前原生 Agent 工具循环，并移除本轮最终助手
 文本；不会再进入下一次工具选择。已经执行的外部工具动作不会撤销。普通
 `@`、普通原生会话和其他插件唤醒不能用它抹除回复。
@@ -326,7 +375,7 @@ reason: 可选的当前语境理由，不向群聊显示
 - 限频使用单调时钟和内存短锁；重启后计数清零，但租约不会因此延长。
 - 同一进程内租约墙钟不回退，已观察到期的租约不会因校时回拨复活。
 - 原生 `@`、引用、唤醒词与命令不经过插件限频。
-- 心跳与到期清理只由 AstrBot 原生 Cron 调度；插件不创建后台异步循环或持久/含内容消息队列。
+- 旧 Heartbeat 与到期清理继续复用 AstrBot 原生 Cron；rc2 AttentionProgram 仅用内存短时状态实现 Watch debounce、去重与 dirty generation，真正主 Agent 执行仍交回 AstrBot 原生 Cron/Agent，不建立第二套 Agent 或持久消息正文队列。
 - 同一 UMO、同一目标的首条租约消息立即获得额外激活；固定最小间隔内，新事件
   只替换无内容代次，截止时间不顺延，最终仅最新事件任务获得一次机会。
 - 预约器不保存消息正文、组件、事件对象、回复目标或 Provider 请求；进程重启
@@ -349,14 +398,14 @@ reason: 可选的当前语境理由，不向群聊显示
 Plugin Page 使用 AstrBot 注入的 `window.AstrBotPluginPage`：
 
 - 前端只调用 `bridge.apiGet("state")`、`bridge.apiPost("access")`、
-  `bridge.apiPost("activation")`、`bridge.apiPost("rate")` 和
+  `bridge.apiPost("program")`、`bridge.apiPost("activation")`、`bridge.apiPost("rate")` 和
   `bridge.apiPost("heartbeat")`。
 - 页面与 LLM 工具复用同一个应用服务，不复制业务逻辑。
 - 页面关闭后插件保持无头运行。
 - 页面只使用现有租约派生的 `scope_ref`，不接收或展示原始 UMO。
 - 页面通过现有 `state` API 只读显示默认配置或所选作用域的生效配置；前缀
   只显示“留空/已填写”，不回显其内容。
-- 页面只读检测三个操作工具的 AstrBot 原生权限；若仍为 `admin`，会明确提示
+- 页面只读检测相关操作工具的 AstrBot 原生权限；若仍为 `admin`，会明确提示
   该设置在插件授权检查之前阻断普通操作员。
 - 首个作用域租约必须由当前会话中的正式 Agent 工具帧建立。
 - 首版页面一次只显示和管理一个作用域；写操作使用页面内影响预览确认，不依赖受限 iframe 中不可用的浏览器原生确认框；批量变更还必须勾选二次确认。

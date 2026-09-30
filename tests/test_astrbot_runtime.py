@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,9 +20,16 @@ from astrbot_plugin_sender_activation.echo_service import (  # noqa: E402
     ECHO_TAG,
 )
 from astrbot_plugin_sender_activation.heartbeat_domain import heartbeat_payload  # noqa: E402
+from astrbot_plugin_sender_activation.host_diagnostics import evaluate_host_config  # noqa: E402
 from astrbot_plugin_sender_activation.main import SenderActivationPlugin  # noqa: E402
+from astrbot_plugin_sender_activation.attention_program_service import (  # noqa: E402
+    PROGRAM_KIND,
+    PROGRAM_SCHEMA_VERSION,
+    PROGRAM_TAG,
+)
 from astrbot_plugin_sender_activation.settings import PluginSettings  # noqa: E402
 from astrbot.core.agent.tool import ToolSet  # noqa: E402
+from astrbot.core.config.default import DEFAULT_CONFIG  # noqa: E402
 from astrbot.core.cron.events import CronMessageEvent  # noqa: E402
 from astrbot.core.platform.message_session import MessageSession  # noqa: E402
 from astrbot.core.provider.register import llm_tools  # noqa: E402
@@ -144,12 +152,14 @@ def make_cron(payload: dict[str, Any]) -> CronMessageEvent:
 
 
 def test_registration() -> None:
-    assert plugin_main.VERSION == "1.1.0-rc.19"
+    assert plugin_main.VERSION == "1.3.0-rc.1"
     expected = [
         "manage_sender_activation_access",
         "manage_sender_activation",
         "manage_sender_activation_rate",
         "manage_heartbeat_lease",
+        "manage_active_listener",
+        "manage_attention_program",
         "yield_current_turn",
         "manage_attention_ignore",
         "manage_echo_hook",
@@ -166,10 +176,32 @@ def test_registration() -> None:
     assert {row["function"]["name"] for row in light} == set(expected)
     ignore_schema = next(row for row in full if row["function"]["name"] == "manage_attention_ignore")
     echo_schema = next(row for row in full if row["function"]["name"] == "manage_echo_hook")
+    listener_schema = next(row for row in full if row["function"]["name"] == "manage_active_listener")
+    program_schema = next(row for row in full if row["function"]["name"] == "manage_attention_program")
     ignore_props = ignore_schema["function"]["parameters"]["properties"]
     echo_props = echo_schema["function"]["parameters"]["properties"]
+    listener_props = listener_schema["function"]["parameters"]["properties"]
+    program_props = program_schema["function"]["parameters"]["properties"]
     assert {"target_ids", "trigger_count", "trigger_window_seconds", "ignore_duration_seconds", "policy_seconds"} <= set(ignore_props)
     assert {"delay_seconds", "count", "interval_seconds", "instruction"} <= set(echo_props)
+    assert {
+        "condition_kind",
+        "condition_values",
+        "frequency",
+        "response_speed",
+        "watchdog",
+        "lifetime",
+        "goal",
+    } <= set(listener_props)
+    assert {
+        "program_ids",
+        "goal",
+        "watches",
+        "recheck",
+        "lease",
+    } <= set(program_props)
+    assert program_props["watches"]["type"] == "array"
+    assert program_props["watches"].get("items", {}).get("type") == "object"
     print(
         "tool_schema_chars",
         json.dumps(
@@ -190,11 +222,14 @@ def test_handler_priority() -> None:
     ]
     by_name = {handler.handler_name: handler for handler in handlers}
     guard = by_name["apply_attention_guard"]
+    program_sensor = by_name["observe_attention_program_signal"]
     activation = by_name["activate_native_agent"]
     assert guard.extras_configs["priority"] == 3000
+    assert program_sensor.extras_configs["priority"] == 2500
     assert activation.extras_configs["priority"] == 2000
     ordered_names = [handler.handler_name for handler in handlers]
-    assert ordered_names.index("apply_attention_guard") < ordered_names.index("activate_native_agent")
+    assert ordered_names.index("apply_attention_guard") < ordered_names.index("observe_attention_program_signal")
+    assert ordered_names.index("observe_attention_program_signal") < ordered_names.index("activate_native_agent")
 
 
 def test_owned_cron_context() -> None:
@@ -216,6 +251,27 @@ def test_owned_cron_context() -> None:
         source="tool",
         sender_id=A,
     )
+    program = {
+        "session": SCOPE,
+        "sender_id": A,
+        "origin": "astrbot_plugin_sender_activation",
+        "note": "program reconcile test",
+        PROGRAM_TAG: {
+            "kind": PROGRAM_KIND,
+            "schema_version": PROGRAM_SCHEMA_VERSION,
+            "program_ids": ["program-test"],
+            "generations": [1],
+            "created_at": 1000.0,
+            "level_triggered": True,
+            "single_flight": True,
+        },
+    }
+    program_event = make_cron(program)
+    assert SenderActivationPlugin._scope(program_event) == SCOPE
+    assert SenderActivationPlugin._sender(program_event) == A
+    assert plugin._activation_source(program_event) == "attention_program"
+    assert plugin._plugin_proactive_source(program_event) == "attention_program"
+
     heartbeat_event = make_cron(heartbeat)
     assert SenderActivationPlugin._scope(heartbeat_event) == SCOPE
     assert SenderActivationPlugin._sender(heartbeat_event) == A
@@ -283,6 +339,38 @@ def test_config_authority() -> None:
     assert elevated == same_without_model
 
 
+def test_host_agent_runner_diagnostic() -> None:
+    config = deepcopy(DEFAULT_CONFIG)
+    runner = config.get("agent_runner")
+    if isinstance(runner, dict):
+        runner["runner_type"] = "local"
+        expected_path = "agent_runner.runner_type"
+    else:
+        config["provider_settings"]["agent_runner_type"] = "local"
+        expected_path = "provider_settings.agent_runner_type"
+
+    local_report = evaluate_host_config(config, scope_specific=True)
+    local_check = next(
+        check for check in local_report["checks"] if check["id"] == "local_agent_runner"
+    )
+    assert local_check["path"] == expected_path
+    assert local_check["status"] == "pass"
+
+    if isinstance(runner, dict):
+        runner["runner_type"] = "dify"
+    else:
+        config["provider_settings"]["agent_runner_type"] = "dify"
+    third_party_report = evaluate_host_config(config, scope_specific=True)
+    third_party_check = next(
+        check
+        for check in third_party_report["checks"]
+        if check["id"] == "local_agent_runner"
+    )
+    assert third_party_check["status"] == "action_required"
+    assert third_party_check["observed"] == "non_local"
+    assert third_party_report["blocker_count"] >= 1
+
+
 async def test_guard_modes() -> None:
     for mode in ("extra_only", "suppress_llm", "stop_event"):
         plugin = object.__new__(SenderActivationPlugin)
@@ -346,9 +434,10 @@ async def main() -> None:
     test_owned_cron_context()
     test_error_contract()
     test_config_authority()
+    test_host_agent_runner_diagnostic()
     await test_guard_modes()
     await test_echo_preflight_gate()
-    print("rc19 AstrBot runtime integration counterexamples: PASS")
+    print("v1.3 rc1 AstrBot runtime integration counterexamples: PASS")
 
 
 if __name__ == "__main__":

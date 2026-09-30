@@ -2,11 +2,11 @@ name: integration check
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
+  pull_request:
     paths:
       - main.py
       - settings.py
+      - host_diagnostics.py
       - attention_domain.py
       - attention_service.py
       - echo_service.py
@@ -14,6 +14,34 @@ on:
       - heartbeat_gate.py
       - heartbeat_service.py
       - cron_adapter.py
+      - listener_service.py
+      - attention_program_service.py
+      - harness_core.py
+      - tests/test_listener_runtime.py
+      - tests/test_attention_program_runtime.py
+      - tests/test_harness_core.py
+      - tests/test_heartbeat_truth.py
+      - tests/test_astrbot_runtime.py
+      - .github/workflows/integration-check.yml
+  push:
+    branches: [main]
+    paths:
+      - main.py
+      - settings.py
+      - host_diagnostics.py
+      - attention_domain.py
+      - attention_service.py
+      - echo_service.py
+      - heartbeat_domain.py
+      - heartbeat_gate.py
+      - heartbeat_service.py
+      - cron_adapter.py
+      - listener_service.py
+      - attention_program_service.py
+      - harness_core.py
+      - tests/test_listener_runtime.py
+      - tests/test_attention_program_runtime.py
+      - tests/test_harness_core.py
       - tests/test_heartbeat_truth.py
       - tests/test_astrbot_runtime.py
       - .github/workflows/integration-check.yml
@@ -21,14 +49,24 @@ on:
 permissions:
   contents: read
 
-env:
-  ASTRBOT_BASELINE_TAG: v4.27.2
-  ASTRBOT_BASELINE_SHA: ad4fbfa90ca0c4ac2b30b3250e34dbf8fe7babbf
-
 jobs:
   astrbot-runtime:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - astrbot_tag: v4.27.2
+            astrbot_sha: ad4fbfa90ca0c4ac2b30b3250e34dbf8fe7babbf
+            astrbot_version: 4.27.2
+          - astrbot_tag: v4.28.2
+            astrbot_sha: 3c7adafa1397e182d60b1016bf88759265113c8a
+            astrbot_version: 4.28.2
+    env:
+      ASTRBOT_BASELINE_TAG: ${{ matrix.astrbot_tag }}
+      ASTRBOT_BASELINE_SHA: ${{ matrix.astrbot_sha }}
+      ASTRBOT_BASELINE_VERSION: ${{ matrix.astrbot_version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +79,8 @@ jobs:
           from pathlib import Path
           version = tomllib.loads(Path('/tmp/AstrBot/pyproject.toml').read_text(encoding='utf-8'))['project']['version']
           print('AstrBot source version:', version)
-          assert version == '4.27.2', version
+          import os
+          assert version == os.environ['ASTRBOT_BASELINE_VERSION'], version
           PY
           python -m pip install --user -e /tmp/AstrBot
 
@@ -49,9 +88,12 @@ jobs:
         run: |
           python tests/test_heartbeat_truth.py
           python tests/test_astrbot_runtime.py
+          python tests/test_listener_runtime.py
+          python tests/test_attention_program_runtime.py
+          python tests/test_harness_core.py
 
       - name: Candidate consistency
         run: |
-          python -m py_compile main.py settings.py attention_domain.py attention_service.py echo_service.py
+          python -m py_compile main.py settings.py host_diagnostics.py attention_domain.py attention_service.py echo_service.py listener_service.py attention_program_service.py harness_core.py
           python -m json.tool _conf_schema.json >/dev/null
           git diff --check

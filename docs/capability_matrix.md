@@ -1,6 +1,8 @@
 # Agent Attention Runtime：能力可达性与副作用基线
 
-本文件冻结 `1.1.0-rc.19` 候选的**实际可达能力、权限来源、运行效果与已知副作用**。后续版本新增能力时可以扩展此表，但不得把尚未实现的概念写成已实现能力，也不得在未更新对应测试的情况下改变这些效果。
+> 架构总纲以 [公共自律 Harness](self_discipline_harness.md) 为准；AttentionProgram 的具体运行契约见 [engineering_proposal.md](engineering_proposal.md)。
+
+本文件保留从 rc19 延续至 `1.3.0-rc.1` 的**实际可达能力、权限来源、运行效果与已知副作用**，主要用于兼容性和回归审计。它不是未来架构设计文档；Sender Activation、Heartbeat、Echo 等旧主动路径会逐步降级为兼容 Adapter。
 
 ## 1. 总效果图
 
@@ -118,9 +120,9 @@ CI 分层：
 
 - `quick-check.yml`：低成本静态与纯运行时不变量；
 - `integration-check.yml`：需要 AstrBot 宿主的集成测试；
-- `release-audit.yml`：PR 从 draft 进入 ready 后或 ready 状态继续变更时执行完整 release gate。
+- `release-audit.yml`：创建 ready PR、从 draft 进入 ready 或 ready 状态继续变更时执行完整 release gate。
 
-AstrBot 宿主基线钉在 `v4.27.2`，并同时校验提交 `ad4fbfa90ca0c4ac2b30b3250e34dbf8fe7babbf`，避免上游 `master` 漂移导致候选证据失真。
+AstrBot 宿主兼容性检查固定覆盖 `v4.27.2`（`ad4fbfa90ca0c4ac2b30b3250e34dbf8fe7babbf`）与 `v4.28.2`（`3c7adafa1397e182d60b1016bf88759265113c8a`），并校验各自提交，避免上游 `master` 漂移导致候选证据失真。
 
 ## 7. 后续变更规则
 
