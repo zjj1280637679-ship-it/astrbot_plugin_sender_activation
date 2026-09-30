@@ -559,15 +559,18 @@ DENY 已冻结为结果类型，但 Constitution / Budget / Admission 尚未统�
 
 ## 12. Temporal Trace 与自我修正
 
-未来 Audit/Trace 应保持极薄：
+当前已经实现一个 **Trace v0**：每个活跃 Program 最多保留 64 条、进程内易失的控制面事实，可由 `manage_attention_program(action=list)` 读取。
+
+当前记录：
 
     timestamp
-    contract_id
-    generation
-    wake_reason
+    world_signal
+    wake_intent
     governor_decision
-    turn_outcome
-    action_ref(optional)
+    generation
+    turn_started
+    turn_finished / turn_deferred
+    explicit yield
 
 不保存：
 
@@ -575,41 +578,32 @@ DENY 已冻结为结果类型，但 Constitution / Budget / Admission 尚未统�
     完整消息正文
     主观“好/坏”评分
 
-Skill 可以纵向读取：
+Trace 只负责让过去的行为可重新观察。Skill 可以提示 Agent 纵向比较时间戳、Wake 来源、世界变化与显式 Yield，但**程序不根据固定阈值自动评价或调参**。
 
-    最近多久醒过几次？
-    Watch / Recheck 比例？
-    Action / Yield / Done 比例？
-    是否连续 Action 而世界无变化？
-    是否长期只有 Recheck？
-    Settle 是否明显太短？
-    当前 Contract 是否仍合理？
+例如：
 
-然后由 Agent 自己：
+    连续多次 Recheck + Yield
 
-    Keep
-    Modify
-    Shrink
-    Extend
-    Done
+只能作为“值得重新判断当前职责是否合理”的证据，不能在 Runtime 中写成：
 
-形成真正的自校正闭环：
+    if yield_count >= N:
+        auto_change_recheck()
 
-    Contract
-       ↓
-    Governor
-       ↓
-      Turn
-       ↓
-    Action/Yield
-       ↓
-      Trace
-       ↓
-    Reflection Skill
-       ↓
-    Agent Re-evaluation
-       ↓
-    Contract Update
+自我修正是以下组合的涌现结果：
+
+    主动追踪自由
+        +
+    主动终止自由
+        +
+    客观 Trace
+        +
+    Skill 中的案例与观察维度
+        +
+    主 Agent 高语言判断
+        ↓
+    继续 / 等待 / 行动 / Yield / 结束职责
+
+因此不新增 SelfOptimizationEngine、AdaptiveFrequency 或自动 Contract 调参模块。
 
 ---
 
@@ -687,6 +681,41 @@ Skill 可以纵向读取：
 
 ---
 
+## 14.1 认识论边界：代码判断状态，AI 判断意义
+
+程序只裁定可机械验证的结构事实：
+
+    身份
+    时间
+    数量
+    字面 Match
+    权限
+    生命周期
+    去重
+    并发
+    资源状态
+
+任何依赖语义、价值、意图、完成度或情境的判断，都留给主 Agent：
+
+    是否真正回答问题
+    是否出现新信息
+    是否值得介入
+    任务是否完成
+    提醒是否过度
+    当前职责是否仍有意义
+
+不变量：
+
+    Lexical Match ≠ Meaning
+    Count ≠ Importance
+    Event ≠ Intent
+    Trigger ≠ Decision
+    Silence ≠ Completion
+
+Match 的最高权限只是“形成注意力候选”，不能形成业务结论。
+
+---
+
 ## 15. 验收分层
 
 以后不能只用“场景有没有成功”判断插件正确性。
@@ -750,6 +779,7 @@ v1.3.0-rc.1 已经完成的第一阶段：
     due_watch_intent
     govern_wake_intents
     claim_reconcile
+    restore_reconcile_claim
     needs_reconcile
 
 ### attention_program_service.py
@@ -765,7 +795,9 @@ v1.3.0-rc.1 已经完成的第一阶段：
     Web/Tool state
     Host preflight
 
-它已经开始通过 harness_core 处理 Watch 状态、WakeIntent、dirty generation 与 reconcile claim，但尚未完成全部机制原子化。
+它已经通过 harness_core 处理 Watch 状态、WakeIntent、dirty generation 与 reconcile claim；失败的 Turn 会恢复 claim 的 dirty 责任并经过短 backoff 重试。Watch 的 trailing Settle 在运行期间继续更新尾部 deadline，避免同一 AttentionKey 并发。
+
+当前还提供 bounded volatile Temporal Trace，供 Skill / Agent 纵向观察控制面事实。尚未完成的是所有旧主动来源的统一入口与完整 Governor 收敛。
 
 ### 旧模块
 
@@ -784,25 +816,28 @@ v1.3.0-rc.1 已经完成的第一阶段：
 
 ## 17. 下一阶段实施顺序
 
-### Phase A：修正时间语义
+### Phase A：真实环境验证当前单路时间语义
 
-把 running-dirty 的下一 Turn 从：
+当前 Watch reducer 已自然满足 trailing Settle：
 
-    Turn 完成 → 立即 requeue
-
-升级为：
-
+    RUNNING 期间相关 Event
+      ↓
+    更新 pending tail / ready_at
+      ↓
     Turn 完成
       ↓
-    若期间有新变化
-      ↓
-    重新进入同一 trailing Settle
-      ↓
-    quiet N
-      ↓
-    下一 Turn
+    quiet deadline 未到 → 继续等待
+    quiet deadline 已过 → 可以立即继续
 
-同时保留“如果世界早已安静够久，则立即运行”的语义。
+本阶段不再增加第二套“延迟回复 Runtime”，而是用自动反例和真实 QQ 时间戳验证这一组合语义。
+
+同时已经修正：
+
+    failed/preflight-blocked Turn
+      ≠
+    reconciled
+
+失败 claim 会恢复 dirty，并经短 backoff 再争取 Turn。
 
 ### Phase B：统一 WakeIntent
 
@@ -834,13 +869,20 @@ v1.3.0-rc.1 已经完成的第一阶段：
 
 不要求物理上都进入同一个文件。
 
-### Phase D：加入极薄 Temporal Trace
+### Phase D：Temporal Trace（v0 已完成，后续只按真实需求扩展）
 
-只记录控制面事实，为 Skill 的纵向反思提供客观材料。
+当前已记录 bounded volatile 控制面事实，并通过 Program list 暴露。后续只有在真实环境证明缺少某类客观事实时才扩展；禁止把主观评分或业务结论塞进 Trace。
 
-### Phase E：Skill 重构
+### Phase E：Skill 重构（第一轮已完成）
 
-把业务策略、参数选择、纵向自校正原则继续移出 Runtime，写入 Skill。
+当前 Skill 已加入：
+
+    代码判断状态 / AI 判断意义
+    trailing Settle 的真实语义
+    Trace 纵向观察案例
+    自我修正属于涌现行为
+
+真实测试后再根据误用案例补 Skill，不把案例反写成 Runtime 规则。
 
 ### Phase F：删除重复 Runtime
 
