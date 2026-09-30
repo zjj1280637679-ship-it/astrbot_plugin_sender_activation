@@ -45,6 +45,7 @@ jobs:
           grep -q 'VERSION = "1.2.0-rc.1"' main.py
           grep -q 'version: "1.2.0-rc.1"' metadata.yaml
           grep -q 'astrbot_version: ">=4.26.1"' metadata.yaml
+          node --check pages/state/app.js
           git diff --check
 
       - name: Run invariant regression suite
