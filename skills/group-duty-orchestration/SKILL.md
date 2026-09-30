@@ -28,6 +28,8 @@ AttentionProgram
 
 Watch 和 Recheck 只产生 dirty signal，不是未来命令。Runtime 会按控制主体 single-flight 归一化；真正醒来后必须重新读取**当前世界**，而不是机械执行建立 Program 时设想的动作。
 
+公共自律任务不要把外界事件当成“AI 是否存在”的开关：只要有限职责仍有意义，应保留一个合理的 Recheck 作为内部节奏。若显式使用 `recheck=off`，该 Program 退化为仅对外界变化敏感的 reactive duty，不具备“世界沉默时仍会回来”的持续性。
+
 ## 建立 Program
 
 先回答：
@@ -48,6 +50,40 @@ Watch 和 Recheck 只产生 dirty signal，不是未来命令。Runtime 会按�
 不好：
 
 > 三分钟后发送“还有谁没签到？”
+
+### 程序判断与 AI 判断的边界
+
+程序只判断低歧义的结构事实，例如：
+
+- sender ID 是否相等；
+- 字面关键词是否出现；
+- 数量是否达到阈值；
+- 时间是否到点；
+- Lease 是否过期；
+- 同一 AttentionKey 是否正在运行。
+
+这些事实只能决定“是否值得重新看”，不能形成业务结论。
+
+必须由主 Agent 结合完整上下文判断：
+
+- 对方是否真的回答了问题；
+- 是否出现了新信息；
+- 任务是否已经完成；
+- 当前提醒是否有价值；
+- 讨论是否已经结束；
+- 是否应该介入、继续等待或结束职责。
+
+牢记：
+
+```text
+Lexical Match ≠ Meaning
+Count ≠ Importance
+Event ≠ Intent
+Trigger ≠ Decision
+Silence ≠ Completion
+```
+
+**代码判断状态，AI 判断意义。**
 
 ### Watch
 
@@ -75,7 +111,7 @@ Watch 和 Recheck 只产生 dirty signal，不是未来命令。Runtime 会按�
 - `settle_3s`：连续发言/多人汇报，安静 3 秒。
 - `custom`：特殊需求。
 
-Settle 是 quiet/debounce，不是“每条消息固定晚 N 秒执行”。等待期间该 Watch 新命中会重新计算安静期。
+Settle 是 trailing quiet/debounce，不是“每条消息固定晚 N 秒执行”。等待期间该 Watch 新命中会把 quiet deadline 推到最后一次相关变化之后；如果主 Agent 此时已经在运行，新消息也只更新尾部状态，不并发启动第二个 Agent。当前 Turn 完成后仍复用同一 quiet deadline：世界已经安静够久则可以继续，否则继续等待。
 
 ### Recheck
 
@@ -106,7 +142,29 @@ AttentionProgram 主动回合不是新的用户命令。
 5. 无公开价值：`yield_current_turn`。
 6. Goal 已完成：`manage_attention_program(cancel)` 净化 Program，再按需回复或沉默。
 
-运行期间又有新事件时，Runtime 不并发启动第二个同主体 Agent；只把 Program 再标 dirty，本轮结束后再 reconcile 一次。
+运行期间又有新事件时，Runtime 不并发启动第二个同主体 Agent。新变化继续进入现有 Watch/Settle：本轮结束后，只有相关世界已经达到对应 quiet period，下一次 reconcile 才可开始；如果 quiet period 在本轮运行期间已经自然经过，则可以立即继续。
+
+## 用客观时间轨迹检查自己的使用效果
+
+`manage_attention_program(action=list)` 会返回每个活跃 Program 的一个**有界、易失的控制面 Trace**。它只记录时间戳、world signal、WakeIntent、Turn 开始/完成/延期以及显式 Yield 等事实，不记录完整消息正文，也不记录私有思维链。
+
+Trace 的用途不是让程序自动调参，也不是给自己打分，而是让你在需要时纵向观察：
+
+- 最近多久获得了多少次 Turn；
+- 外界实际发生了多少次相关变化；
+- 是 Watch 唤醒多，还是 Recheck 唤醒多；
+- 是否反复 Wake 后选择 Yield；
+- 是否世界长期没有变化，但职责仍持续存在；
+- 某次 Turn 是否因宿主/调度条件暂时无法执行而被延期。
+
+**不要把固定阈值写成结论。** 下面只是判断案例，不是规则：
+
+- 连续多次 Recheck 后都没有值得行动的变化，可能说明当前职责的检查节奏不再合适；
+- 多次 world signal 最终只形成一次稳定 Turn，说明 Settle 正在正常压缩消息洪峰；
+- 多次显式 Yield 不必然意味着 Program 错了，也可能只是当前阶段没有公开发言价值；
+- 长时间没有外界变化时是否继续职责，要结合 Goal、Lease、现实时间和用户原始要求判断。
+
+自我修正是 **Trace + Skill + 主 Agent 高语境判断 + 已有追踪/终止自由** 的涌现结果，不是 Runtime 的自动优化功能。若判断职责已经没有意义，应结束它；不要为了维持旧计划而继续消耗主动 Turn。
 
 ## 常见组合
 
