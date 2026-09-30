@@ -460,6 +460,8 @@ async def test_temporal_trace_is_bounded_control_plane_feedback() -> None:
     await service.observe_event(scope=SCOPE, envelope=envelope("trace-1", message="private body"))
     await asyncio.sleep(0.03)
     await service.record_turn_outcome(program_ids=[program_id], outcome="yield")
+    for _ in range(80):
+        await service.record_turn_outcome(program_ids=[program_id], outcome="yield")
 
     snap = await service.snapshot(scope=SCOPE)
     trace = snap["programs"][0]["trace"]
@@ -474,7 +476,7 @@ async def test_temporal_trace_is_bounded_control_plane_feedback() -> None:
     )
     serialized = repr(trace)
     assert "private body" not in serialized
-    assert len(trace) <= 64
+    assert len(trace) == 64
     assert len(manager.run_payloads) == 1
     await service.terminate()
 
