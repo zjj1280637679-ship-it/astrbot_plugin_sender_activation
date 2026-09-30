@@ -7,6 +7,7 @@ const elements = {
   storage: document.getElementById("storage-status"),
   activations: document.getElementById("activation-count"),
   rates: document.getElementById("rate-count"),
+  listeners: document.getElementById("listener-count"),
   heartbeats: document.getElementById("heartbeat-count"),
   accessCount: document.getElementById("access-count"),
   quarantine: document.getElementById("quarantine-count"),
@@ -30,6 +31,19 @@ const elements = {
   accessTableWrap: document.getElementById("access-table-wrap"),
   accessRowCount: document.getElementById("access-row-count"),
   accessEmpty: document.getElementById("access-empty"),
+  listenerForm: document.getElementById("listener-form"),
+  listenerOwner: document.getElementById("listener-owner"),
+  listenerConditionKind: document.getElementById("listener-condition-kind"),
+  listenerConditionValues: document.getElementById("listener-condition-values"),
+  listenerFrequency: document.getElementById("listener-frequency"),
+  listenerResponseSpeed: document.getElementById("listener-response-speed"),
+  listenerWatchdog: document.getElementById("listener-watchdog"),
+  listenerLifetime: document.getElementById("listener-lifetime"),
+  listenerGoal: document.getElementById("listener-goal"),
+  listenerRows: document.getElementById("listener-rows"),
+  listenerTableWrap: document.getElementById("listener-table-wrap"),
+  listenerRowCount: document.getElementById("listener-row-count"),
+  listenerEmpty: document.getElementById("listener-empty"),
   activationForm: document.getElementById("activation-form"),
   activationAction: document.getElementById("activation-action"),
   activationTargets: document.getElementById("activation-targets"),
@@ -181,6 +195,8 @@ function outcomeMessage(result, fallback) {
       "rateAlreadyAbsent",
       "目标原本没有额外激活限频。",
     ),
+    listener_started: t("listenerStarted", "统一监听已建立。"),
+    listeners_cancelled: t("listenersCancelled", "统一监听已取消。"),
     heartbeat_created: t("heartbeatCreated", "心跳租约已建立。"),
     heartbeat_renewed: t("heartbeatRenewed", "心跳租约已续期。"),
     heartbeat_disabled: t("heartbeatDisabled", "心跳租约已终止。"),
@@ -330,6 +346,70 @@ function renderRecoveryReports(payload) {
   elements.recoveryCount.textContent = `${reports.length} ${t("rows", "条")}`;
   elements.recoveryEmpty.style.display = reports.length ? "none" : "block";
   elements.recoveryTableWrap.style.display = reports.length ? "block" : "none";
+}
+
+function listenerConditionLabel(listener) {
+  const values = listener.condition_values || [];
+  const labels = {
+    sender: "用户",
+    keyword: "关键词",
+    any_message: "任意消息",
+    time_only: "仅时间",
+  };
+  const suffix = values.length ? `：${values.join(", ")}` : "";
+  return `${labels[listener.condition_kind] || listener.condition_kind}${suffix}`;
+}
+
+function listenerWatchdogLabel(listener) {
+  if (listener.watchdog_seconds == null) return t("off", "关闭");
+  const runtime = listener.runtime || {};
+  const remaining = runtime.watchdog_remaining_seconds;
+  return remaining == null
+    ? secondsLabel(listener.watchdog_seconds)
+    : `${secondsLabel(listener.watchdog_seconds)} / 下次 ${secondsLabel(remaining)}`;
+}
+
+function renderListenerRows(payload) {
+  const listeners = payload.state.listeners || [];
+  elements.listenerRows.replaceChildren();
+  for (const listener of listeners) {
+    const row = document.createElement("tr");
+    const values = [
+      listener.listener_id,
+      listenerConditionLabel(listener),
+      `${listener.frequency_count} 次 / ${listener.settle_delay_seconds}s`,
+      listenerWatchdogLabel(listener),
+      secondsLabel(listener.remaining_seconds),
+      listener.goal,
+    ];
+    for (const value of values) {
+      const cell = document.createElement("td");
+      cell.textContent = value || "--";
+      row.append(cell);
+    }
+    const actions = document.createElement("td");
+    actions.className = "row-actions";
+    actions.append(
+      button(t("cancelListener", "取消"), "small danger", async () => {
+        const confirmed = await requestConfirmation({
+          message: t("confirmListenerCancel", "确认取消这个统一监听？"),
+          scope: listener.scope_ref,
+          targets: [listener.listener_id],
+          destructive: true,
+        });
+        if (!confirmed) return;
+        await postListener("cancel", listener.scope_ref, {
+          listenerIds: [listener.listener_id],
+        });
+      }),
+    );
+    row.append(actions);
+    elements.listenerRows.append(row);
+  }
+  elements.listenerRowCount.textContent =
+    `${listeners.length} ${t("rows", "条")}`;
+  elements.listenerEmpty.style.display = listeners.length ? "none" : "block";
+  elements.listenerTableWrap.style.display = listeners.length ? "block" : "none";
 }
 
 function renderHeartbeatRows(payload) {
@@ -534,6 +614,7 @@ function render(payload) {
   }
   elements.activations.textContent = String(health.activation_count);
   elements.rates.textContent = String(health.rate_count);
+  elements.listeners.textContent = String(health.listener_count || 0);
   elements.heartbeats.textContent = String(health.heartbeat_count || 0);
   elements.accessCount.textContent = String(health.access_grant_count || 0);
   elements.quarantine.textContent = String(
@@ -546,6 +627,7 @@ function render(payload) {
   renderAccessRows(payload);
   renderRows(payload);
   renderRecoveryReports(payload);
+  renderListenerRows(payload);
   renderHeartbeatRows(payload);
   elements.scopeRef.textContent = scopeRef(elements.scopeSelect.value);
   const session = payload.session_status || {
@@ -583,6 +665,31 @@ async function refresh() {
   } finally {
     elements.refresh.disabled = false;
   }
+}
+
+async function postListener(action, scopeRef, values = {}) {
+  const result = await bridge.apiPost("listener", {
+    action,
+    scope_ref: scopeRef,
+    owner_sender_id: values.ownerSenderId || "",
+    listener_ids: values.listenerIds || [],
+    condition_kind: values.conditionKind || "",
+    condition_values: values.conditionValues || [],
+    frequency: values.frequency || "each",
+    response_speed: values.responseSpeed || "normal_1s",
+    watchdog: values.watchdog || "default_3m",
+    lifetime: values.lifetime || "2h",
+    goal: values.goal || "",
+  });
+  notify(
+    outcomeMessage(
+      result,
+      result.changed
+        ? t("listenerChanged", "统一监听已更新。")
+        : t("noChange", "状态没有变化。"),
+    ),
+  );
+  await refresh();
 }
 
 async function postActivation(action, scopeRef, targetIds, durationSeconds) {
@@ -667,6 +774,15 @@ elements.scopeSelect.addEventListener("change", () => {
   refresh();
 });
 
+elements.listenerConditionKind.addEventListener("change", () => {
+  const kind = elements.listenerConditionKind.value;
+  const needsValues = kind === "sender" || kind === "keyword";
+  elements.listenerConditionValues.disabled = !needsValues;
+  elements.listenerConditionValues.required = needsValues;
+  elements.listenerFrequency.disabled = kind === "time_only";
+  if (kind === "time_only") elements.listenerFrequency.value = "each";
+});
+
 elements.activationAction.addEventListener("change", () => {
   elements.activationDuration.disabled =
     elements.activationAction.value === "disable";
@@ -712,6 +828,51 @@ elements.confirmationAccept.addEventListener("click", () => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements.confirmationLayer.hidden) {
     closeConfirmation(false);
+  }
+});
+
+elements.listenerForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const scope = requireScope();
+    const owner = elements.listenerOwner.value.trim();
+    if (!/^\d{5,20}$/.test(owner)) {
+      throw new Error(t("listenerOwnerRequired", "请填写真实数字 QQ ID 作为控制主体。"));
+    }
+    const kind = elements.listenerConditionKind.value;
+    const values =
+      kind === "sender" || kind === "keyword"
+        ? parseTargets(elements.listenerConditionValues.value)
+        : [];
+    if ((kind === "sender" || kind === "keyword") && !values.length) {
+      throw new Error(t("listenerConditionRequired", "请填写监听条件值。"));
+    }
+    const goal = elements.listenerGoal.value.trim();
+    if (!goal) {
+      throw new Error(t("listenerGoalRequired", "请填写开放目标。"));
+    }
+    const confirmed = await requestConfirmation({
+      message: t(
+        "confirmListenerStart",
+        "确认建立这个统一监听？默认兜底会在无条件命中时主动重新检查。",
+      ),
+      scope,
+      targets: values.length ? values : [kind],
+      destructive: false,
+    });
+    if (!confirmed) return;
+    await postListener("start", scope, {
+      ownerSenderId: owner,
+      conditionKind: kind,
+      conditionValues: values,
+      frequency: elements.listenerFrequency.value,
+      responseSpeed: elements.listenerResponseSpeed.value,
+      watchdog: elements.listenerWatchdog.value,
+      lifetime: elements.listenerLifetime.value,
+      goal,
+    });
+  } catch (error) {
+    notify(error.message || String(error), "error");
   }
 });
 
@@ -839,6 +1000,7 @@ function renderLocale() {
 
 await bridge.ready();
 renderLocale();
+elements.listenerConditionKind.dispatchEvent(new Event("change"));
 elements.heartbeatAction.dispatchEvent(new Event("change"));
 bridge.onContext(() => {
   renderLocale();
