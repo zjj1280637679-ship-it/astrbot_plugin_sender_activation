@@ -1,134 +1,453 @@
-# 群内有限激活程序：工程设想
+# Attention Program / Reconcile Runtime：v1.2.0-rc.2 工程契约
 
-状态：需求与设计草案，尚未实现。本文不改变当前插件的工具接口或运行行为。
+> v1.3.0-rc.1 起，本 Runtime 被定位为公共自律 Harness 的第一种 Contract 实现。
+> Harness 的最高层总纲见 [self_discipline_harness.md](self_discipline_harness.md)：**Agent 不由事件驱动存在，而由职责驱动持续存在；事件只改变它所处的世界。**
+> 本文继续保留 AttentionProgram 的具体工程契约与 v2 存储语义。若本文旧 rc2 描述与 vNext 总纲冲突，以总纲为目标语义；尤其是 running-dirty 后续应重新进入同一 trailing Settle，而不是把“Turn 完成立即 requeue”视为最终设计。
 
-## 1. 工程闭环
+状态：**rc2 已实现候选。** 当前运行时已经从“一 Listener 一职责”重构为 **AttentionProgram → Watch → Dirty/Reconcile**；旧 rc1 Listener 只保留迁移与兼容适配，不再运行第二套 Listener Runtime。
 
-先设计预期面板，明确系统对用户的承诺，再补全实现与验证。
+## 1. 已实现目标
 
-| 层次 | 载体 | 要回答的问题 |
-| --- | --- | --- |
-| 需求 | 面板与 AI 工具参数 | 用户希望关注谁、以什么频率、到什么时候？ |
-| 条件 | 运行环境 | 当前群、身份、权限、消息接收和 Agent 执行能力是否满足要求？ |
-| 策略 | 插件逻辑 | 如何把需求转成匹配、计数、限频、调度和撤销？ |
-| 指标 | 实际运行记录 | 是否命中正确对象、按约定激活、到期停止？ |
+AstrBot 主 AI 被视为群聊沙盒中的连续实体。当前回合可以为开放目标保留有限的未来注意力，但运行时不保存“未来要机械执行的动作”。
 
-面板表达需求，运行环境提供条件，插件逻辑执行策略，真实效果通过指标检验。保存成功只证明状态已写入；是否真正激活，需要观察实际事件与执行记录。
+新的一级实体不是 Listener，而是：
 
-## 2. 范围与实体
+```text
+AttentionProgram
+= 一个尚未完成的开放目标
++ 一组告诉 Runtime “什么时候值得重新看”的 Watch
++ 无事件时的 Recheck
++ 有限 Lease
+```
 
-AI 只操作当前群，工具不接受群号或跨群会话参数。后台从可信调用上下文取得群范围，并在状态读写和定时执行时再次校验。同一插件实例可以服务多个群，各群状态必须隔离。
+一句话：
 
-- **带身份的信息**：群消息包含稳定用户 ID、显示名称、消息时间与内容。管理员、普通群员是身份的权限属性，由后台核验。用户名用于表达目标，实际匹配使用稳定 ID。
-- **时间定位点**：包括预定自激活点、追踪终止点以及延迟结束点。它们承担不同用途，可以同时存在。
-- **程序**：连接对象、触发条件和有限生命周期的持久规则。程序需要稳定标识，供查询、修改和取消；是否允许同一对象拥有多个同类程序，仍需确定。
+> **Watch 负责把世界变化变成 dirty；Program 负责表示“哪件事还值得我继续关心”；Agent 每次被唤醒都重新 reconcile 当前世界与 Goal。**
 
-名称解析必须限定当前群。重名或无法确认身份时返回候选或错误，不自动猜测。权限来源及委托规则由后台执行，不能以 AI 填写的“管理员”字段作为授权依据。
+## 1.1 借鉴而不是重造
 
-## 3. 预期面板：先压实追踪
+rc2 的核心句柄直接对齐成熟实现：
 
-当前群作为只读运行上下文。主表单先完成以下五项：
+- Kubernetes client-go workqueue：同 key single-flight，处理中再次 dirty，完成后再处理一次；
+- controller-runtime Reconcile：触发只说明“可能需要重新计算”，真正处理重新读取当前状态；
+- CloudEvents：事件信封采用 `id/source/type/subject/time` 一类通用句柄，`source + id` 用于去重；
+- AstrBot 原生 Cron/Agent：真正的主 Agent 执行仍由 `run_job_now()` 承载，插件不建立第二套 Agent。
 
-| 字段 | 示例 | 含义 |
-| --- | --- | --- |
-| 程序 | 追踪 | 目标消息触发额外 Agent 判断机会 |
-| 用户名 | 张三 | 解析并显示确认后的当前群用户 ID |
-| 消息触发比 | 1:1 | 每条符合条件的目标消息产生一次激活候选 |
-| 最小激活间隔 | 60 秒 | 本程序相邻两次实际激活至少间隔 60 秒 |
-| 终止时间 | 2026-10-01T18:00:00+08:00 | 到点停止新增激活 |
+参考：
+- https://pkg.go.dev/k8s.io/client-go/util/workqueue
+- https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/reconcile
+- https://github.com/cloudevents/spec/blob/main/cloudevents/spec.md
 
-时间必须明确时区，面板显示本地时间及剩余有效期。启动前预览预期效果，后台成功回执后才显示已建立程序。
+## 2. 最小逻辑树
 
-运行列表显示对象、程序类型、触发比、最小间隔、终止时间、运行状态、上次实际激活及下次允许激活时间，提供修改与取消操作。权限、宿主诊断与存储状态放在辅助区域。
+```text
+AstrBot / 外部世界
+        │
+        ├─ QQ 消息
+        ├─ 关键词
+        ├─ 消息数量
+        ├─ 时间
+        └─ 未来其他事件源
+                │
+                ▼
+        EventEnvelope
+        id / source / type / subject / time
+                │
+                ▼
+      AttentionProgram
+        ├─ Goal
+        ├─ Lease
+        ├─ Recheck
+        └─ Watch[]
+             ├─ Match
+             ├─ Quantifier
+             └─ Settle
+                │
+             命中后
+                ▼
+        mark Program DIRTY
+                │
+                ▼
+       AttentionKey Normalizer
+        scope + controller
+                │
+        ┌───────┴────────┐
+        │                │
+   当前未运行         Agent 正在运行
+        │                │
+按 settle 到期调度      只增加 dirty generation
+        │                │
+        └───────┬────────┘
+                ▼
+            single-flight
+                ▼
+          Main Agent Turn
+                ▼
+      RECONCILE(CurrentState, Goal)
+        ├─ Action
+        ├─ Yield
+        ├─ Keep
+        └─ Done / Cancel
+                │
+                ▼
+     若运行期间再次出现相关变化
+       不并发；继续更新 tail/dirty
+                │
+                ▼
+     当前 Turn 完成后复用原 Settle
+       quiet 未满足 → 继续等待
+       quiet 已满足 → 可立即继续
+                │
+                ▼
+     Recheck 从成功完成时刻重新计时
+                │
+                ▼
+        Lease 到期最终退出
+```
 
-“下次允许激活时间”不代表一定会激活：必须存在有效候选且执行条件仍满足。激活只提供 Agent 判断机会，是否发言由 Agent 根据上下文决定。
+## 3. 六个给 AI 的高层句柄
 
-## 4. AI 工具：统一提交需求
+### 3.1 Goal：开放目标
 
-预期只提供一个程序管理入口，让 AI 填写与面板相同的数据。追踪提交示例：
+回答：
 
-```json
+> 醒来以后，我要重新判断什么？
+
+Goal 是 Reconcile Goal，不是未来固定动作。
+
+好：
+
+```text
+判断今日练习汇报是否已经完整；
+完整则统一反馈；
+不完整则根据当前时间和缺席情况判断是否提醒。
+```
+
+不好：
+
+```text
+三分钟后发送“还有谁没签到？”
+```
+
+### 3.2 Watch：关注什么变化
+
+回答：
+
+> 什么变化值得把这个 Program 标脏？
+
+Watch 只是传感器，不直接激活 Agent。
+
+首批 Match Adapter 可以继续来自 rc1：
+
+- sender
+- keyword
+- any_message
+- time / future external adapters
+
+未来 GitHub、文件、Webhook、工具状态等也只需要适配成 Watch Event，不改 Reconcile Core。
+
+### 3.3 Quantifier：多少变化才值得重新看
+
+替换内部模糊的 `frequency` 语义。
+
+首版目标只保留简单离散值：
+
+- every event
+- every 3
+- every 10
+- custom N
+
+它只回答计数，不承担 AND/OR、时间窗口、集合齐备或顺序模式。
+
+### 3.4 Settle：世界安静多久才认为这一波结束
+
+替换“response speed / delay”的歧义。
+
+```text
+immediate  = 0s
+normal     = quiet 1s
+settled    = quiet 3s
+```
+
+它是 debounce / quiet period，不是“每条事件固定延后 N 秒执行”。
+
+### 3.5 Recheck：即使没有事件，最迟多久也重新看一次
+
+替换 `watchdog` 的产品语义。
+
+```text
+default = 3m
+10m
+30m
+off
+custom
+```
+
+Condition/Watch 负责敏捷性，Recheck 负责活性。Recheck 也只是 signal，仍必须经过 Program 的归一化路径。
+
+### 3.6 Lease：这件职责最多存在多久
+
+回答：
+
+> 这项 AttentionProgram 何时最终退出？
+
+Lease 不承担 debounce、retry、completion、count window 等其他时间语义。
+
+## 4. Runtime 内部句柄
+
+这些不应暴露给普通 AI 面板。
+
+### 4.1 Program ID
+
+精确标识一个开放职责，供查询、更新、取消。
+
+### 4.2 AttentionKey
+
+```text
+(scope, controller)
+```
+
+控制“真正醒来的始终只有一个我”。同一 AttentionKey 的多个 READY Program 合并成一次主 Agent Turn。
+
+### 4.3 Dirty Generation
+
+不要保存一个无限事件队列，只保存“自上次 reconcile 之后是否又变脏”。
+
+```text
+ProgramRuntime
 {
-  "程序": "追踪",
-  "用户名": "张三",
-  "消息触发比": "1:1",
-  "最小激活间隔秒": 60,
-  "终止时间": "2026-10-01T18:00:00+08:00"
+  dirty_generation
+  reconciled_generation
+  running
+  ready_at
+  reasons
 }
 ```
 
-后台负责身份解析、权限判断、群范围绑定、参数校验、状态持久化和执行，不要求 AI 编排这些内部步骤。工具与面板调用同一服务，采用同一参数语义和结果回执。
+事件命中：
 
-统一入口还需明确建立、修改、查询、取消的操作表达。取消应指向程序标识，避免误删同一对象的其他职责。上面的五字段描述追踪需求，不构成所有程序类型的最终 Schema。
+```text
+dirty_generation += 1
+```
 
-后续程序类型按各自需求扩展：
+若 Agent 正在运行：
 
-| 类型或动作 | 预期功能 | 待压实内容 |
-| --- | --- | --- |
-| 追踪 | 身份消息命中后获得激活机会 | 先实现 1:1；其他比例另行定义计数语义 |
-| 心跳 | 按时间表自激活，到期结束 | 周期、首次时间、职责说明及错过时间点的处理 |
-| 延迟 | 临时抑制指定对象引发的额外激活，保留追踪关系 | 按时长或消息条数结束；计数对象与起算点 |
-| 净化／取消 | 撤销指定程序及其尚未开始的后续激活 | 精确取消范围与在途状态回执 |
+```text
+不并发启动第二个 Agent
+只继续 mark dirty
+```
 
-关键词可以作为消息匹配条件后续扩展。自主取消仍需遵守后台权限和范围约束。当前回合选择沉默与取消未来程序属于不同效果，统一入口不能混淆两者。
+Agent 完成：
 
-## 5. 追踪策略与执行边界
+```text
+若运行期间存在新的 Watch tail
+    → 继续服从该 Watch 的 trailing Settle
 
-1. 接收需求，解析当前群目标身份，校验权限和有限终止时间。
-2. 写入程序，返回程序标识、解析后的对象及生效参数。
-3. 当前群目标消息到达后，检查程序有效性；1:1 将每条符合条件的消息计为候选。
-4. 第一个候选在执行条件满足时立即激活。间隔内的新候选合并，只保留最新候选，截止时间不因新消息延后。
-5. 到允许时间时重新检查程序、权限、群范围和宿主可执行状态。有效候选才可以激活；没有候选不凭空激活。
-6. 到期或取消后清除待执行候选，阻止新的额外激活。
+若已有 dirty 且没有更晚的 quiet deadline
+    → 可再次 reconcile
 
-例如 10:00:00 首次激活，10:00:10、10:00:20 连续收到目标消息，则合并后最早在 10:01:00 使用最新候选再激活。如果程序在 10:00:50 终止，10:01:00 不应激活。
+若 Turn 未真正成功执行
+    → 恢复已 claim generation 为 dirty
+    → 短 backoff 后重试
 
-需要明确“实际激活”的统一执行边界，并在并发调度时原子占用额度。达到终止时间即失效；终止检查优先于同一时刻的待执行候选。已开始的 Agent 调用无法通过撤销规则追回，回执应区分“未来已停止”与“仍有在途调用”。
+否则
+    → idle
+```
 
-这项间隔约束针对该追踪程序产生的额外激活。AstrBot 原生 @、命令等激活应单独记录来源；若需要限制该用户引发的全部激活，需要另行定义需求。
+Claim 只是执行预约，不是已完成证明。失败/preflight blocked 不得把责任伪装成 reconciled。
 
-## 6. 必要支持模块与框架分工
+## 5. EventEnvelope：给更广泛外界数据的薄接口
 
-| 模块 | 支持职责 |
-| --- | --- |
-| 当前群上下文与身份解析 | 可信群绑定、名称到 ID 的确认、身份变化处理 |
-| 权限校验 | 建立、修改、取消与自主操作的授权 |
-| 程序状态服务 | 程序标识、生命周期、持久化、重启恢复及过期清理 |
-| 消息匹配与频率控制 | 候选计数、每程序间隔、并发占用与合并 |
-| 定时执行适配 | 心跳调度、待执行候选及执行前复检 |
-| 统一接口与回执 | 面板和工具共享服务，反馈实际生效参数与失败原因 |
-| 运行记录 | 记录命中、合并、阻止、执行与取消，支撑指标验证 |
+不同事件源先归一成：
 
-AstrBot 提供原生消息事件、Agent、上下文和定时任务能力。插件承担当前群内的有限职责状态、对象匹配、额外激活约束和真实回执。AI 负责理解需求与作出语义判断，后台执行可确定的规则。
+```text
+EventEnvelope
+{
+  id
+  source
+  type
+  subject
+  occurred_at
+  observed_at
+  payload_ref
+}
+```
 
-## 7. 验收指标
+重要原则：
 
-| 承诺 | 可观察指标与验收场景 |
-| --- | --- |
-| 目标正确 | 解析 ID 与选定成员一致；其他用户消息不触发该程序 |
-| 群范围固定 | 相同用户在其他群的消息不能命中本群程序 |
-| 1:1 候选 | 每条有效目标消息产生一个候选；记录后续被合并或阻止的原因 |
-| 每分钟最多一次 | 同一程序相邻实际激活时间差至少 60 秒，包括并发消息场景 |
-| 合并语义明确 | 间隔内多条消息只产生一次后续激活，使用最新有效候选 |
-| 到期停止 | 终止时刻及之后不再启动该程序的新激活，待执行候选被清除 |
-| 取消有效 | 取消后无新激活；在途调用如实显示 |
-| 状态可信 | 保存失败不显示已启动；重启后按恢复策略处理，过期程序不复活 |
+- `source + id` 可用于去重；
+- `occurred_at` 与 `observed_at` 分开；
+- payload 只保留引用或必要元数据，Runtime 不默认持久保存完整消息正文；
+- 事件只是“可能需要重新计算”的事实，不是 Agent 命令。
 
-运行记录至少关联程序标识、群范围、目标 ID、候选时间、实际激活时间、来源和处理结果。不必为指标默认保存完整消息正文。
+## 6. 一个 Program 可以拥有多个 Watch
 
-回复是否有价值、论证是否正确属于 Agent 效果指标，需要另行评价。唤醒成功不能直接证明回复质量。
+这是相对 rc1 最关键的结构变化。
 
-## 8. 与现有实现的差距及推进顺序
+例如：
 
-现有插件已有对象激活租约、限频、有限心跳、Ignore、Echo、权限与结构化沉默等机制。本文提出的统一体验尚未落地，尤其需要补全：
+```text
+Program: 今日瑜伽练习监督
 
-- 当前群用户名解析与重名处理；
-- 统一程序模型、标识、面板与单工具入口；
-- 每程序最小激活间隔；现有全局间隔不能直接等同于表单中的每程序 60 秒；
-- 明确终止时间输入与时区展示；
-- 支撑运行列表和验收指标的执行记录；
-- 延迟的条数／时长语义。现有 Ignore 的计数阈值不能直接解释为“忽略接下来 N 条消息”。
+Goal:
+  判断今日练习成员是否已经完成汇报；
+  完整则统一反馈；
+  未完整则根据当前时间与缺席情况判断是否提醒。
 
-推进顺序：固定追踪面板和数据契约 → 接入身份与权限条件 → 实现状态及调度策略 → 用真实消息验证指标 → 再扩展心跳、延迟和精确取消。
+Lease:
+  今天结束前
 
-待确定：多程序并存规则、修改后的计数与间隔继承、重启后待执行候选处理、心跳错过时间点的补偿、权限变化后的程序处理。实现前逐项确定，避免表单承诺与实际行为分离。
+Recheck:
+  3m
+
+Watch A:
+  Match = 学员消息
+  Quantifier = every event
+  Settle = quiet 3s
+
+Watch B:
+  Match = keyword("完成", "练完")
+  Quantifier = every event
+  Settle = quiet 3s
+```
+
+A/B 都只把同一个 Program 标脏，不各自持有 Goal，也不各自启动 Agent。
+
+## 7. 不把业务 Barrier 塞进 Core
+
+“所有学员是否报齐”暂时不做成 Runtime 的一级 Condition。
+
+Runtime 只负责：
+
+```text
+有人汇报了
+→ Program dirty
+→ Agent 醒来
+→ 读取当前世界
+→ 自己判断 reported / missing
+```
+
+如果三分钟没有新事件：
+
+```text
+Recheck signal
+→ Program dirty
+→ Agent 醒来
+→ 再次读取当前世界
+→ 判断是否需要提醒
+```
+
+以后若完整扫描过贵，可以单独增加 Projection：
+
+```text
+Event → Projection update → mark dirty
+                     ↓
+              Agent reconcile
+```
+
+Projection 是优化层，不属于 Attention Core。
+
+## 8. 重启恢复
+
+坚持 level-triggered reconcile，不追求精确复活所有旧 edge。
+
+重启后：
+
+```text
+恢复未过期 AttentionProgram
+        ↓
+丢弃旧 volatile debounce / pending edge
+        ↓
+每个活跃 Program 标记 restart_dirty
+        ↓
+按 AttentionKey 合并
+        ↓
+做一次 current-state reconcile
+```
+
+因此重启恢复的正确性来自“重新读取当前世界”，不是持久化崩溃前最后 1.37 秒的 debounce 状态。
+
+## 9. 明确不进核心的概念
+
+rc2 明确不把 Runtime 做成 CEP / Workflow DSL。
+
+暂不进入 Attention Core：
+
+- 任意 AND / OR / NOT 条件树；
+- A 后 B、严格顺序等 Sequence DSL；
+- all_of(users) 这类业务集合 Barrier；
+- hold_for / hysteresis；
+- 完整事件历史持久化；
+- 固定未来回复脚本；
+- 第二套 Agent 或第二套业务数据库。
+
+真实需求出现时，再分别评估为 Watch Adapter、Projection、Scheduler 或独立业务插件。
+
+## 10. AI 面板（rc2 已实现）
+
+AI 工具与控制台只暴露真正需要理解的六件事：
+
+```text
+开放目标       Goal
+关注什么       Watch
+多少变化再看   Quantifier
+安静多久再看   Settle
+最迟多久再看   Recheck
+持续多久       Lease
+```
+
+其余：
+
+```text
+Program ID
+AttentionKey
+Event ID
+dirty_generation
+single-flight
+dedupe
+reset
+restart_dirty
+```
+
+全部沉到底层。
+
+## 11. rc1 → rc2 已实现迁移
+
+rc2 启动时，只有 v2 primary/backup 都真正不存在，才允许把 rc1 Listener 映射为：
+
+```text
+rc1 Listener.goal              → Program.goal
+rc1 Listener.lifetime          → Program.lease
+rc1 Listener.watchdog          → Program.recheck
+rc1 Listener.condition         → Program.watch[0].match
+rc1 Listener.frequency         → Program.watch[0].quantifier
+rc1 Listener.settle_delay      → Program.watch[0].settle
+```
+
+rc2 没有推翻 rc1，而是把“一个 Listener = 一个完整职责”拆成：
+
+```text
+一个 Program
+  + 多个 Watch
+```
+
+旧 listener_id 原值保留为 program_id；time_only 映射为 `watches=[] + Recheck`。如果 v2 已存在但损坏，Runtime fail inert，禁止用可能陈旧的 v1 覆盖 v2。
+
+## 12. rc2 已自动化验收
+
+当前候选至少验证：
+
+1. 一个 Program 可以拥有多个 Watch，但只有一个 Goal / Recheck / Lease。
+2. 多个 Watch 同时命中只增加同一 Program 的 dirty generation。
+3. 多个 Program 同属一个 AttentionKey 时仍只有一个主 Agent single-flight。
+4. Agent 运行期间的新事件不会并发启动第二个 Agent；新的 Watch tail 继续更新 quiet deadline，完成后按 trailing Settle 决定下一 Turn。
+5. Recheck 与任何外部 Watch 一样，只产生 dirty signal。
+6. 重启后不复活旧 edge，而是对未过期 Program 做一次 restart reconcile。
+7. rc1 Listener 可以无损迁移成 Program + single Watch。
+8. AI 常规调用不需要接触 Program ID 之外的任何内部并发句柄。
+9. `source + id` 重复 EventEnvelope 不重复处理。
+10. v2 损坏时不会复活陈旧 v1。
+11. Recheck 从实际成功 Agent Turn 完成时刻重新计时。
+12. Agent dispatch / preflight 失败不会消费 dirty generation，并经过短 backoff 重试。
+13. Program list 暴露 bounded volatile Temporal Trace；Trace 不保存完整消息正文或私有思维链。
+14. AstrBot 4.27.2 与 4.28.2 均通过 Tool Schema / Runtime 集成检查。

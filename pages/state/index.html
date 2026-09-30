@@ -30,6 +30,10 @@
           <strong id="rate-count">0</strong>
         </div>
         <div>
+          <span class="label">Attention Program</span>
+          <strong id="program-count">0</strong>
+        </div>
+        <div>
           <span class="label">全局心跳租约</span>
           <strong id="heartbeat-count">0</strong>
         </div>
@@ -88,7 +92,7 @@
           >
         </div>
         <p class="scope-note">
-          指定成员要使用插件，三个操作工具必须在 AstrBot 扩展组件中保持
+          指定成员要使用插件，相关操作工具必须在 AstrBot 扩展组件中保持
           <code>member</code>；具体 ID 是否有权由下面的插件授权表判断。
           检测只读，不会修改 AstrBot 设置。
         </p>
@@ -199,8 +203,107 @@
         <div id="recovery-empty" class="empty-state">暂无待处理恢复报告</div>
       </section>
 
-      <section class="section">
-        <h2>激活租约</h2>
+      <section class="section program-primary">
+        <div class="section-heading">
+          <div>
+            <h2>主动注意力程序</h2>
+            <p class="scope-note">
+              一个 Program 表示一个开放职责；多个 Watch 只是让同一个 Goal 重新计算的不同入口。
+              事件不会直接命令 AI，Runtime 会先标记 dirty，再 single-flight 唤醒主 Agent 重新读取当前世界。
+            </p>
+          </div>
+          <span id="program-row-count" class="muted">0 条</span>
+        </div>
+
+        <form id="program-form" class="form-grid program-form">
+          <label>
+            <span>控制主体 QQ ID</span>
+            <input
+              id="program-controller"
+              type="text"
+              inputmode="numeric"
+              autocomplete="off"
+              placeholder="未来由哪个主 Agent 身份继续判断"
+              required
+            />
+          </label>
+
+          <label>
+            <span>无事件复查</span>
+            <select id="program-recheck">
+              <option value="default_3m" selected>默认 · 3 分钟</option>
+              <option value="ten_min">宽松 · 10 分钟</option>
+              <option value="thirty_min">长周期 · 30 分钟</option>
+              <option value="off">关闭</option>
+            </select>
+          </label>
+
+          <label>
+            <span>持续多久</span>
+            <select id="program-lease">
+              <option value="10m">10 分钟</option>
+              <option value="30m">30 分钟</option>
+              <option value="2h" selected>2 小时</option>
+              <option value="24h">24 小时</option>
+            </select>
+          </label>
+
+          <label class="full-width">
+            <span>开放目标 · Goal</span>
+            <textarea
+              id="program-goal"
+              rows="3"
+              maxlength="2000"
+              placeholder="例如：判断今日练习汇报是否完整；完整则统一反馈，不完整则根据当前时间与缺席情况决定是否提醒。"
+              required
+            ></textarea>
+          </label>
+
+          <div class="full-width watch-editor">
+            <div class="watch-editor-heading">
+              <div>
+                <strong>关注变化 · Watch</strong>
+                <p class="scope-note">Watch 只负责告诉 Runtime“这件事可能值得重新看”，不写固定回复。</p>
+              </div>
+              <button id="program-add-watch" type="button" class="secondary small">
+                ＋ 添加 Watch
+              </button>
+            </div>
+            <div id="program-watches" class="program-watches"></div>
+            <div id="program-no-watch" class="scope-note">
+              可删除全部 Watch，仅保留 Recheck；这就是“纯定时复查”，无需 time_only 特殊模式。
+            </div>
+          </div>
+
+          <div class="form-action">
+            <button type="submit">建立 Attention Program</button>
+          </div>
+        </form>
+
+        <div id="program-table-wrap" class="table-wrap">
+          <table class="program-table">
+            <thead>
+              <tr>
+                <th>Program ID</th>
+                <th>Watch</th>
+                <th>Recheck</th>
+                <th>剩余</th>
+                <th>Generation</th>
+                <th>Goal</th>
+                <th class="actions-column">操作</th>
+              </tr>
+            </thead>
+            <tbody id="program-rows"></tbody>
+          </table>
+        </div>
+        <div id="program-empty" class="empty-state">暂无 Attention Program</div>
+      </section>
+
+      <section class="section legacy-section">
+        <div class="section-heading">
+          <h2>兼容：旧对象激活租约</h2>
+          <span class="muted">高级 / 旧配置</span>
+        </div>
         <form id="activation-form" class="form-grid">
           <label>
             <span>操作</span>
