@@ -678,19 +678,12 @@ class AttentionProgramService:
             self.last_error_code = f"program_storage_load_failed:{type(exc).__name__}"
             return "invalid"
 
-        if stored.primary_error or stored.backup_error:
-            errors = ",".join(
-                value
-                for value in (stored.primary_error, stored.backup_error)
-                if value
-            )
-            self.last_error_code = f"program_storage_slot_read_failed:{errors}"
-            self.storage_ready = False
-            self.storage_write_healthy = False
-            self.loaded_from = "read_error"
-            return "invalid"
-
-        if stored.primary is None and stored.backup is None:
+        if (
+            stored.primary is None
+            and stored.backup is None
+            and not stored.primary_error
+            and not stored.backup_error
+        ):
             return "absent"
 
         now = self._now()
@@ -731,6 +724,17 @@ class AttentionProgramService:
                 return "loaded"
             except DomainError as exc:
                 self.last_error_code = exc.code
+        if stored.primary_error or stored.backup_error:
+            errors = ",".join(
+                value
+                for value in (stored.primary_error, stored.backup_error)
+                if value
+            )
+            self.last_error_code = f"program_storage_slot_read_failed:{errors}"
+            self.storage_ready = False
+            self.storage_write_healthy = False
+            self.loaded_from = "read_error"
+            return "invalid"
         if saw_document:
             self.storage_ready = False
             self.storage_write_healthy = False
@@ -748,17 +752,12 @@ class AttentionProgramService:
             self.last_error_code = f"legacy_listener_storage_load_failed:{type(exc).__name__}"
             return "invalid"
 
-        if stored.primary_error or stored.backup_error:
-            errors = ",".join(
-                value
-                for value in (stored.primary_error, stored.backup_error)
-                if value
-            )
-            self.last_error_code = f"legacy_listener_slot_read_failed:{errors}"
-            self.loaded_from = "legacy_read_error"
-            return "invalid"
-
-        if stored.primary is None and stored.backup is None:
+        if (
+            stored.primary is None
+            and stored.backup is None
+            and not stored.primary_error
+            and not stored.backup_error
+        ):
             return "absent"
 
         now = self._now()
@@ -802,6 +801,15 @@ class AttentionProgramService:
             self.last_error_code = None
             return "migrated"
 
+        if stored.primary_error or stored.backup_error:
+            errors = ",".join(
+                value
+                for value in (stored.primary_error, stored.backup_error)
+                if value
+            )
+            self.last_error_code = f"legacy_listener_slot_read_failed:{errors}"
+            self.loaded_from = "legacy_read_error"
+            return "invalid"
         if saw_document:
             self.last_error_code = "legacy_listener_state_unrecognized"
             self.loaded_from = "legacy_invalid"
