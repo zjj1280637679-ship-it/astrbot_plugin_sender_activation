@@ -149,6 +149,12 @@ function parseTargets(value) {
   );
 }
 
+function parseDelimitedValues(value) {
+  return [...new Set(value.split(/[,，\n]+/).map((item) => item.trim()))].filter(
+    Boolean,
+  );
+}
+
 function selectedScope() {
   return elements.scopeSelect.value;
 }
@@ -464,7 +470,11 @@ function collectWatches() {
     const kind = card.querySelector(".watch-kind").value;
     const rawValues = card.querySelector(".watch-values").value;
     const values =
-      kind === "sender" || kind === "keyword" ? parseTargets(rawValues) : [];
+      kind === "sender"
+        ? parseTargets(rawValues)
+        : kind === "keyword"
+          ? parseDelimitedValues(rawValues)
+          : [];
     if ((kind === "sender" || kind === "keyword") && !values.length) {
       throw new Error(t("watchValuesRequired", "每个用户/关键词 Watch 都必须填写条件值。"));
     }
