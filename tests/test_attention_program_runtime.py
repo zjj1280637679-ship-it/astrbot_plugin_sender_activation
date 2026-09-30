@@ -54,6 +54,19 @@ class ReadErrorStore(MemoryStore):
         )
 
 
+class PartialReadStore(MemoryStore):
+    def __init__(self, backup_document: dict[str, Any]) -> None:
+        super().__init__(backup=backup_document)
+
+    async def load(self) -> StoredDocuments:
+        return StoredDocuments(
+            None,
+            self.backup,
+            primary_error="SimulatedPrimaryReadError",
+            backup_error=None,
+        )
+
+
 @dataclass
 class FakeJob:
     job_id: str
@@ -504,6 +517,72 @@ async def test_corrupt_v2_never_resurrects_stale_v1() -> None:
     assert manager.run_payloads == []
 
 
+async def test_healthy_v2_backup_survives_primary_read_error() -> None:
+    now = time.monotonic()
+    backup = {
+        "schema_version": PROGRAM_SCHEMA_VERSION,
+        "programs": [
+            {
+                "program_id": "backup-program",
+                "scope": SCOPE,
+                "controller_sender_id": OWNER,
+                "goal": "从健康 backup 恢复",
+                "watches": [],
+                "recheck_seconds": 0.5,
+                "created_at": now - 1,
+                "expires_at": now + 20,
+                "created_by": "agent:test",
+            }
+        ],
+    }
+    manager = FakeManager(block_runs=True)
+    service, _, _ = await new_service(
+        store=PartialReadStore(backup),
+        manager=manager,
+    )
+    assert service.storage_ready is True
+    assert service.loaded_from == "backup"
+    snapshot = await service.snapshot(scope=SCOPE)
+    assert [row["program_id"] for row in snapshot["programs"]] == ["backup-program"]
+    manager.release.set()
+    await service.terminate()
+
+
+async def test_healthy_legacy_backup_survives_primary_read_error() -> None:
+    now = time.monotonic()
+    backup = {
+        "schema_version": 1,
+        "listeners": [
+            {
+                "listener_id": "legacy-backup",
+                "scope": SCOPE,
+                "owner_sender_id": OWNER,
+                "condition_kind": "sender",
+                "condition_values": [TARGET],
+                "frequency_count": 1,
+                "settle_delay_seconds": 0,
+                "watchdog_seconds": 0.5,
+                "goal": "从旧 backup 迁移",
+                "created_at": now - 1,
+                "expires_at": now + 20,
+                "created_by": "agent:test",
+            }
+        ],
+    }
+    manager = FakeManager(block_runs=True)
+    service, _, _ = await new_service(
+        store=MemoryStore(),
+        legacy_store=PartialReadStore(backup),
+        manager=manager,
+    )
+    assert service.storage_ready is True
+    assert service.migrated_from_listener_v1 is True
+    snapshot = await service.snapshot(scope=SCOPE)
+    assert [row["program_id"] for row in snapshot["programs"]] == ["legacy-backup"]
+    manager.release.set()
+    await service.terminate()
+
+
 async def test_legacy_read_error_blocks_empty_startup() -> None:
     service, _, manager = await new_service(
         store=MemoryStore(),
@@ -609,6 +688,8 @@ async def main() -> None:
     await test_restart_marks_current_state_dirty_once()
     await test_listener_v1_migration_preserves_ids()
     await test_corrupt_v2_never_resurrects_stale_v1()
+    await test_healthy_v2_backup_survives_primary_read_error()
+    await test_healthy_legacy_backup_survives_primary_read_error()
     await test_legacy_read_error_blocks_empty_startup()
     await test_unrecognized_legacy_state_blocks_empty_startup()
     await test_v2_read_error_never_looks_like_absent_state()
