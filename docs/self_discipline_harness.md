@@ -78,7 +78,9 @@ AstrBot 继续负责消息、历史、工具、Provider、Cron 与真正的 Agen
 
 纯状态流：
 
-    Event
+    EventEnvelope
+      ↓
+    Adapter 判断 matched / event_ref
       ↓
     observe_watch
       ↓
@@ -93,6 +95,8 @@ AstrBot 继续负责消息、历史、工具、Provider、Cron 与真正的 Agen
     claim_reconcile
       ↓
     ReconcileClaim
+
+重要边界：Harness core 不解释 sender、keyword、QQ、GitHub 或文件事件；具体 Match 属于 Adapter。
 
 ### 3.2 attention_program_service.py
 
