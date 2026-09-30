@@ -23,6 +23,7 @@ from astrbot_plugin_sender_activation.harness_core import (  # noqa: E402
     recheck_intent,
     reset_watch_runtime,
     restart_intent,
+    restore_reconcile_claim,
 )
 
 
@@ -222,6 +223,38 @@ def test_claim_then_new_dirty_requires_one_more_reconcile() -> None:
     assert needs_reconcile(second_processing) is False
 
 
+def test_failed_claim_restores_responsibility_and_merges_new_signals() -> None:
+    first = govern_wake_intents(
+        ProgramRuntime(),
+        [recheck_intent(contract_id="p1", now=50.0)],
+        attention_key_running=False,
+    ).runtime
+    processing, claim = claim_reconcile(first)
+    assert claim is not None
+    assert claim.previous_reconciled_generation == 0
+
+    while_running = govern_wake_intents(
+        processing,
+        [
+            WakeIntent(
+                contract_id="p1",
+                reason="watch:new",
+                source="watch",
+                observed_at=51.0,
+                event_refs=("m-new",),
+            )
+        ],
+        attention_key_running=True,
+    ).runtime
+
+    restored = restore_reconcile_claim(while_running, claim)
+    assert restored.dirty_generation == 2
+    assert restored.reconciled_generation == 0
+    assert needs_reconcile(restored) is True
+    assert restored.pending_reasons == ("recheck", "watch:new")
+    assert restored.event_refs == ("m-new",)
+
+
 def test_event_refs_are_deduplicated_and_bounded() -> None:
     intents = [
         WakeIntent(
@@ -296,6 +329,7 @@ def main() -> None:
     test_many_wake_intents_become_one_dirty_generation()
     test_already_dirty_or_running_is_coalesced()
     test_claim_then_new_dirty_requires_one_more_reconcile()
+    test_failed_claim_restores_responsibility_and_merges_new_signals()
     test_event_refs_are_deduplicated_and_bounded()
     test_governor_rejects_cross_contract_batch()
     test_zero_event_ref_budget_keeps_no_refs()
