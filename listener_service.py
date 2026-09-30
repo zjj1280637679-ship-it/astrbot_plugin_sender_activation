@@ -146,6 +146,7 @@ class _RuntimeState:
     last_signal_at: float = 0.0
     pending_match_count: int = 0
     latest_sender_id: str | None = None
+    pending_reasons: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -747,17 +748,39 @@ class ListenerService:
             activated_contracts: list[ListenerContract] = []
             for contract in self._active_contracts_for_key(key, now=now):
                 runtime = self._runtime.setdefault(contract.listener_id, _RuntimeState())
-                reasons: list[str] = []
-                if runtime.pending and runtime.due_at <= now + DISPATCH_EPSILON_SECONDS:
-                    reasons.append("condition_ready")
+
+                # A watchdog is also only an activation signal. It must pass through
+                # this listener's own settle/debounce window instead of waking the
+                # Agent directly.
                 watchdog_due = self._watchdog_due.get(contract.listener_id)
                 if (
                     watchdog_due is not None
                     and watchdog_due <= now + DISPATCH_EPSILON_SECONDS
                 ):
+                    self._watchdog_due.pop(contract.listener_id, None)
+                    self._signals_seen += 1
+                    if not runtime.pending:
+                        runtime.pending = True
+                        runtime.first_signal_at = now
+                        runtime.pending_match_count = 0
+                    runtime.last_signal_at = now
+                    runtime.due_at = now + contract.settle_delay_seconds
+                    runtime.pending_reasons.add("watchdog")
+
+                if not (
+                    runtime.pending
+                    and runtime.due_at <= now + DISPATCH_EPSILON_SECONDS
+                ):
+                    continue
+
+                reasons: list[str] = []
+                if "condition" in runtime.pending_reasons:
+                    reasons.append("condition_ready")
+                if "watchdog" in runtime.pending_reasons:
                     reasons.append("watchdog_due")
                 if not reasons:
                     continue
+
                 items.append(
                     _ActivationItem(
                         listener_id=contract.listener_id,
@@ -776,7 +799,7 @@ class ListenerService:
                 runtime.last_signal_at = 0.0
                 runtime.pending_match_count = 0
                 runtime.latest_sender_id = None
-                self._watchdog_due.pop(contract.listener_id, None)
+                runtime.pending_reasons.clear()
 
             if not items:
                 self._reschedule_key_locked(key, now=now)
@@ -953,6 +976,7 @@ class ListenerService:
                     runtime.last_signal_at = now
                     runtime.pending_match_count += 1
                     runtime.latest_sender_id = sender
+                    runtime.pending_reasons.add("condition")
                     self._candidates_debounced += 1
                     candidates.append(contract.listener_id)
                     affected_keys.add(contract.dispatch_key)
@@ -967,6 +991,7 @@ class ListenerService:
                 runtime.last_signal_at = now
                 runtime.pending_match_count = runtime.observed_since_reset
                 runtime.latest_sender_id = sender
+                runtime.pending_reasons.add("condition")
                 self._candidates_created += 1
                 candidates.append(contract.listener_id)
                 affected_keys.add(contract.dispatch_key)
