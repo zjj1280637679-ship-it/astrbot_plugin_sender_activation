@@ -483,8 +483,8 @@ function programWatchSummary(program) {
   return watches
     .map((watch) => {
       const values = (watch.match_values || []).join(", ");
-      const suffix = values ? \`：\${values}\` : "";
-      return \`\${watchKindLabel(watch.match_kind)}\${suffix} · \${watch.quantifier_count}次 · quiet \${watch.settle_seconds}s\`;
+      const suffix = values ? `：${values}` : "";
+      return `${watchKindLabel(watch.match_kind)}${suffix} · ${watch.quantifier_count}次 · quiet ${watch.settle_seconds}s`;
     })
     .join("\n");
 }
@@ -495,7 +495,7 @@ function programRecheckLabel(program) {
   const remaining = runtime.recheck_remaining_seconds;
   return remaining == null
     ? secondsLabel(program.recheck_seconds)
-    : \`\${secondsLabel(program.recheck_seconds)} / 下次 \${secondsLabel(remaining)}\`;
+    : `${secondsLabel(program.recheck_seconds)} / 下次 ${secondsLabel(remaining)}`;
 }
 
 function renderProgramRows(payload) {
@@ -505,7 +505,7 @@ function renderProgramRows(payload) {
     const runtime = program.runtime || {};
     const row = document.createElement("tr");
     const generation =
-      \`\${runtime.dirty_generation || 0} / \${runtime.reconciled_generation || 0}\` +
+      `${runtime.dirty_generation || 0} / ${runtime.reconciled_generation || 0}` +
       (runtime.dirty ? " · DIRTY" : "");
     const values = [
       program.program_id,
@@ -540,7 +540,7 @@ function renderProgramRows(payload) {
     elements.programRows.append(row);
   }
   elements.programRowCount.textContent =
-    \`\${programs.length} \${t("rows", "条")}\`;
+    `${programs.length} ${t("rows", "条")}`;
   elements.programEmpty.style.display = programs.length ? "none" : "block";
   elements.programTableWrap.style.display = programs.length ? "block" : "none";
 }
