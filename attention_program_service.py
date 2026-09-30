@@ -57,6 +57,7 @@ MAX_DEDUPE_KEYS = 4096
 DISPATCH_EPSILON_SECONDS = 0.001
 RECONCILE_RETRY_SECONDS = 5.0
 MAX_TRACE_ENTRIES_PER_PROGRAM = 64
+PUBLIC_TRACE_TAIL = 16
 
 QUANTIFIER_PRESETS: dict[str, int] = {
     "each": 1,
@@ -1406,7 +1407,8 @@ class AttentionProgramService:
             )
         recheck_due = self._recheck_due.get(program.program_id)
         retry_due = self._retry_due.get(program.program_id)
-        trace = list(self._trace_by_program.get(program.program_id, ()))
+        trace_rows = list(self._trace_by_program.get(program.program_id, ()))
+        trace = trace_rows[-PUBLIC_TRACE_TAIL:]
         return {
             **program.as_record(),
             "scope_ref": self.scope_ref(program.scope),
@@ -1433,6 +1435,8 @@ class AttentionProgramService:
                 ),
             },
             "trace": trace,
+            "trace_total": len(trace_rows),
+            "trace_truncated": len(trace_rows) > len(trace),
         }
 
     async def snapshot(self, *, scope: Any | None = None) -> dict[str, Any]:
