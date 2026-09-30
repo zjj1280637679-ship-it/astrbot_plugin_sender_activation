@@ -460,13 +460,12 @@ async def test_temporal_trace_is_bounded_control_plane_feedback() -> None:
     await service.observe_event(scope=SCOPE, envelope=envelope("trace-1", message="private body"))
     await asyncio.sleep(0.03)
     await service.record_turn_outcome(program_ids=[program_id], outcome="yield")
-    for _ in range(80):
-        await service.record_turn_outcome(program_ids=[program_id], outcome="yield")
 
     snap = await service.snapshot(scope=SCOPE)
     trace = snap["programs"][0]["trace"]
     events = [row["event"] for row in trace]
     assert events[0] == "contract_created"
+    assert "world_signal" in events
     assert "wake_intent" in events
     assert "turn_started" in events
     assert "turn_finished" in events
@@ -474,9 +473,15 @@ async def test_temporal_trace_is_bounded_control_plane_feedback() -> None:
         row.get("event") == "turn_outcome" and row.get("outcome") == "yield"
         for row in trace
     )
-    serialized = repr(trace)
-    assert "private body" not in serialized
-    assert len(trace) == 64
+    assert "private body" not in repr(trace)
+
+    # Overflow must evict old control facts rather than growing without bound.
+    for _ in range(80):
+        await service.record_turn_outcome(program_ids=[program_id], outcome="yield")
+    overflow = (await service.snapshot(scope=SCOPE))["programs"][0]["trace"]
+    assert len(overflow) == 64
+    assert all(row.get("event") == "turn_outcome" for row in overflow)
+    assert "private body" not in repr(overflow)
     assert len(manager.run_payloads) == 1
     await service.terminate()
 
