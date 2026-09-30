@@ -1,8 +1,8 @@
 name: astrbot_plugin_sender_activation
 display_name: "管理员的真理捍卫器"
-desc: "用这款 AstrBot 插件，让你的 AI 获得限时免@的主动回复能力：持续关注或追踪群成员，定时巡查群聊上下文；用于群聊监控时，由主 Agent 决定反驳、接话或主动沉默。让你的 AI 为你战斗到底。"
-short_desc: "限时免@：让 AstrBot AI 主动回复、持续关注，也能主动沉默"
-version: "1.1.0-rc.19"
+desc: "给 AstrBot 主 AI 增加跨回合的主动注意力：按用户、关键词、消息数量或时间兜底建立有限监听，先归一化信号，再由主 Agent 统一判断、行动或沉默。"
+short_desc: "让 AstrBot AI 自己保持注意、按条件醒来，并在无事件时定时自检"
+version: "1.2.0-rc.1"
 astrbot_version: ">=4.26.1"
 author: "羊膜大人"
 repo: "https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation"
