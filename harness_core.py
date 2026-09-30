@@ -38,20 +38,6 @@ class WatchContract:
     quantifier_count: int
     settle_seconds: float
 
-    def matches(self, envelope: EventEnvelope) -> bool:
-        if envelope.type != "com.astrbot.qq.group.message":
-            return False
-        sender_id = str(envelope.subject or "").strip()
-        message = str(envelope.data.get("message") or "")
-        if self.match_kind == "sender":
-            return sender_id in self.match_values
-        if self.match_kind == "keyword":
-            haystack = message.casefold()
-            return any(value.casefold() in haystack for value in self.match_values)
-        if self.match_kind == "any_message":
-            return True
-        return False
-
     def as_record(self) -> dict[str, Any]:
         return {
             "watch_id": self.watch_id,
@@ -166,13 +152,19 @@ def reset_watch_runtime() -> WatchRuntime:
 def observe_watch(
     watch: WatchContract,
     runtime: WatchRuntime,
-    envelope: EventEnvelope,
     *,
+    matched: bool,
+    event_ref: str | None,
     now: float,
 ) -> tuple[WatchRuntime, WatchObservation]:
-    """Reduce one event into one Watch runtime state."""
+    """Reduce an adapter match result into one Watch runtime state.
 
-    if not watch.matches(envelope):
+    The core deliberately does not know how sender, keyword, GitHub, file or
+    any future event source is matched. Adapters decide matched/not-matched and
+    provide only an optional reference to the triggering world fact.
+    """
+
+    if not matched:
         return runtime, WatchObservation(matched=False)
 
     if runtime.pending:
@@ -182,7 +174,7 @@ def observe_watch(
                 ready_at=now + watch.settle_seconds,
                 last_signal_at=now,
                 pending_match_count=runtime.pending_match_count + 1,
-                latest_event_ref=envelope.ref(),
+                latest_event_ref=event_ref,
             ),
             WatchObservation(matched=True, debounced=True),
         )
@@ -202,7 +194,7 @@ def observe_watch(
             first_signal_at=now,
             last_signal_at=now,
             pending_match_count=observed,
-            latest_event_ref=envelope.ref(),
+            latest_event_ref=event_ref,
         ),
         WatchObservation(matched=True, candidate_created=True),
     )
