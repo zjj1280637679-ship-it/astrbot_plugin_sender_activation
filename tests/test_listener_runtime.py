@@ -248,6 +248,29 @@ async def test_watchdog_resets_after_real_activation() -> None:
     await service.terminate()
 
 
+async def test_watchdog_signal_uses_same_settle_delay() -> None:
+    service, _, manager = await new_service()
+    listener_id = await start(
+        service,
+        condition_kind="time_only",
+        response_speed="custom",
+        settle_delay_seconds=0.05,
+        watchdog="custom",
+        watchdog_seconds=0.05,
+        goal="定时信号也必须先归一化",
+    )
+
+    # Watchdog becomes a signal around 50ms, but the Agent must not run until
+    # the listener's own 50ms settle window also completes.
+    await asyncio.sleep(0.075)
+    assert manager.run_payloads == []
+    await asyncio.sleep(0.055)
+    assert len(manager.run_payloads) == 1
+    assert manager.run_payloads[0][LISTENER_TAG]["listener_ids"] == [listener_id]
+    assert "兜底检查时间已到" in manager.run_payloads[0]["note"]
+    await service.terminate()
+
+
 async def test_time_only_watchdog_can_wake_without_messages() -> None:
     service, _, manager = await new_service()
     listener_id = await start(
@@ -300,6 +323,7 @@ async def main() -> None:
     await test_frequency_threshold()
     await test_same_scope_ready_signals_are_normalized()
     await test_watchdog_resets_after_real_activation()
+    await test_watchdog_signal_uses_same_settle_delay()
     await test_time_only_watchdog_can_wake_without_messages()
     await test_cancel_and_restart_contract()
     print("v1.2 listener runtime counterexamples: PASS")
