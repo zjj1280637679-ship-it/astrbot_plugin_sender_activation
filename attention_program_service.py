@@ -1467,17 +1467,20 @@ class AttentionProgramService:
                 candidate = dict(self._programs)
                 for program in selected:
                     candidate.pop(program.program_id, None)
-                await self._commit_programs(candidate)
 
-            async with self._runtime_lock:
-                affected_keys = {program.attention_key for program in selected}
-                for program in selected:
-                    self._program_runtime.pop(program.program_id, None)
-                    self._recheck_due.pop(program.program_id, None)
-                    for watch in program.watches:
-                        self._watch_runtime.pop((program.program_id, watch.watch_id), None)
-                for key in affected_keys:
-                    self._reschedule_key_locked(key)
+                # Publish persisted desired state and volatile runtime teardown
+                # under one observation boundary so no event can race between
+                # "Program disappeared" and scheduler cleanup.
+                async with self._runtime_lock:
+                    await self._commit_programs(candidate)
+                    affected_keys = {program.attention_key for program in selected}
+                    for program in selected:
+                        self._program_runtime.pop(program.program_id, None)
+                        self._recheck_due.pop(program.program_id, None)
+                        for watch in program.watches:
+                            self._watch_runtime.pop((program.program_id, watch.watch_id), None)
+                    for key in affected_keys:
+                        self._reschedule_key_locked(key)
 
             return {
                 "status": "ok",
@@ -1563,23 +1566,26 @@ class AttentionProgramService:
                 if len(active) >= self.limits.max_total:
                     raise DomainError("program_total_capacity_exceeded", "AttentionProgram 总数达到上限。")
             active[program_id] = program
-            await self._commit_programs(active)
 
-        async with self._runtime_lock:
-            self._program_runtime[program_id] = _ProgramRuntime()
-            for key in [key for key in self._watch_runtime if key[0] == program_id]:
-                self._watch_runtime.pop(key, None)
-            for watch in program.watches:
-                self._watch_runtime[(program_id, watch.watch_id)] = _WatchRuntime()
-            if recheck_value is not None:
-                self._recheck_due[program_id] = now + recheck_value
-            else:
-                self._recheck_due.pop(program_id, None)
-            affected = {program.attention_key}
-            if existing is not None:
-                affected.add(existing.attention_key)
-            for key in affected:
-                self._reschedule_key_locked(key, now=now)
+            # Hold the runtime observation boundary across persistence + publish.
+            # This deliberately trades a short event wait for "no signal can be
+            # observed under the new spec and then erased by runtime reset".
+            async with self._runtime_lock:
+                await self._commit_programs(active)
+                self._program_runtime[program_id] = _ProgramRuntime()
+                for key in [key for key in self._watch_runtime if key[0] == program_id]:
+                    self._watch_runtime.pop(key, None)
+                for watch in program.watches:
+                    self._watch_runtime[(program_id, watch.watch_id)] = _WatchRuntime()
+                if recheck_value is not None:
+                    self._recheck_due[program_id] = now + recheck_value
+                else:
+                    self._recheck_due.pop(program_id, None)
+                affected = {program.attention_key}
+                if existing is not None:
+                    affected.add(existing.attention_key)
+                for key in affected:
+                    self._reschedule_key_locked(key, now=now)
 
         return {
             "status": "ok",
