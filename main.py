@@ -1831,10 +1831,16 @@ class SenderActivationPlugin(Star):
                 tag = payload.get(PROGRAM_TAG) if isinstance(payload, dict) else None
                 program_ids = tag.get("program_ids") if isinstance(tag, dict) else None
                 if isinstance(program_ids, list):
-                    await self.program_service.record_turn_outcome(
-                        program_ids=[str(value) for value in program_ids],
-                        outcome="yield",
-                    )
+                    try:
+                        await self.program_service.record_turn_outcome(
+                            program_ids=[str(value) for value in program_ids],
+                            outcome="yield",
+                        )
+                    except Exception:
+                        logger.debug(
+                            "[sender_activation] temporal_trace_yield_record_failed",
+                            exc_info=True,
+                        )
             self._yield_count += 1
             logger.info(
                 "[sender_activation] turn_yield outcome=turn_yield_accepted source=%s",
