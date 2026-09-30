@@ -8,11 +8,24 @@
 
 > **让该被追问的发言得到反驳，让没有增量的接话归于沉默。**
 
-你只需任命一次，就能让 AstrBot 在限定时间内继续留在争论现场：持续关注或追踪群成员的后续发言，也可以用有限期心跳定时唤醒主 Agent，巡查当时可见的群聊上下文。发现错误信息、概念偷换、回避问题或其他需要澄清的不良发言时，由你的 AI 基于完整上下文主动反驳或接话；没有证据变化、逻辑缺口或其他有效增量时，让它主动沉默。等争论结束，撤销任务或让租期到点，一切自动恢复原状。
+从 `1.2.0-rc.1` 开始，插件把“追踪用户”和“定时心跳”进一步抽象成统一监听：主 AI 可以把自己视为 AstrBot 群聊里的连续实体，为开放目标留下有限的未来注意力。用户、关键词、消息数量或纯时间兜底都只产生**激活信号**；信号先按频率和延迟归一化，再统一唤醒一次主 Agent。AI 醒来后重新读取现场，决定行动、沉默、继续监听或净化，而不是机械执行旧回复。
 
-## 工程设想
+默认监听会在条件命中时按普通 1 秒消抖；即使一直没有条件命中，也会在 3 分钟后给 AI 一次重新检查机会。两者均可选择预设、调整或关闭。
 
-后续统一面板与 AI 工具的设计见 [群内有限激活程序：工程设想](docs/engineering_proposal.md)。文档按“需求—运行条件—插件策略—效果指标”整理，包含追踪参数、后台模块分工、验收场景与现有实现差距；属于设计草案。
+## v1.2 统一监听 Runtime
+
+工程契约见 [统一监听—激活 Runtime：v1.2 工程契约](docs/engineering_proposal.md)。
+
+主入口是 `manage_active_listener`。AI 主要只需要选择：
+
+- **监听条件**：指定用户、关键词、任意消息，或仅按时间自检；
+- **频率**：每次、每 3 次、每 10 次或自定义；
+- **响应速度**：立即、普通 1 秒、稳定 3 秒或自定义；
+- **无事件兜底**：默认 3 分钟、10 分钟、30 分钟、关闭或自定义；
+- **有效期**：10 分钟、30 分钟、2 小时、24 小时或自定义；
+- **开放目标**：未来醒来后重新判断什么。
+
+复杂底层留在 Runtime；Skill 主要告诉 AI “什么时候值得建立监听”，不要求模型学习 debounce、竞态锁或调度实现。
 
 ## 你可能在找
 
@@ -25,15 +38,15 @@
 
 ## Skills-like 两阶段适配
 
-`1.1.0-rc.17` 针对 AstrBot 的 `Skills-like（两阶段）` 工具模式做了原生适配：
+`1.2.0-rc.1` 继续使用 AstrBot 的 `Skills-like（两阶段）` 工具模式：
 
-- 第一阶段只需要看到七个工具的短名称和精简用途，不再常驻整段执行手册；
+- 第一阶段只需要看到工具的短名称和精简用途，不再常驻整段执行手册；
 - 第二阶段在模型选中工具后再提供参数 Schema；
 - 插件复用并强化原有 `group-duty-orchestration` 原生 Skill，把对象关注、周期心跳、有限对象忽略、有限回响、操作员授权、限频与结构化沉默作为一个按需加载的职责编排手册；
 - 该 Skill 初始只暴露名称和触发描述，命中后才加载 `SKILL.md` 的详细流程与边界；
 - `Full（完整参数）` 模式继续兼容；rc17 已有五个工具的名称和参数保持兼容，rc19 另新增 `manage_attention_ignore` 与 `manage_echo_hook`。
 
-因此两阶段优化只改变**给模型展示说明的时机和密度**，不改变租约执行层。若人格明确配置为“不使用任何 Skills”，七个 Tool 仍可按 AstrBot 的工具模式正常工作，只是不再获得按需加载的 Skill 操作手册。
+因此两阶段优化只改变**给模型展示说明的时机和密度**，不改变租约执行层。若人格明确配置为“不使用任何 Skills”，Tool 仍可按 AstrBot 的工具模式正常工作，只是不再获得按需加载的 Skill 操作手册。
 
 > **rc19 候选说明：** `1.1.0-rc.19` 在 rc18 的真实回执契约上增加第一批注意力运行时能力：
 > 对象级有限 Ignore、对象计数/时间窗口触发 Ignore、可选有限 Echo，以及 Heartbeat/Echo 在主 Agent
@@ -162,14 +175,14 @@ QQ ID 授予有限期插件操作员权限；获授权成员只能控制本插�
 | --- | --- |
 | `provider_settings.enable` | 必须开启；关闭后租约最多只能产生 wake 机会，主 Agent 不会运行 |
 | `provider_settings.agent_runner_type` | 首版只验收内置 `local` Agent；第三方 Agent 执行器不在正式支持范围 |
-| 当前对话模型的 `tool_use` 能力 | 必须具备，否则主 Agent 不能产生五个正式工具帧 |
+| 当前对话模型的 `tool_use` 能力 | 必须具备，否则主 Agent 不能可靠建立、净化和维护监听状态 |
 | `provider_settings.show_tool_use_status=false` | 要实现完全无可见回复时应关闭；否则宿主可能先发送工具调用状态 |
 | `provider_settings.identifier`（用户识别） | 使用“我、本人、刚才那个人”等表达时应开启，使主 Agent 获得真实 User ID；插件事件层仍会读取 ID，但模型看不到就无法可靠填写 `target_ids` |
 | `provider_settings.wake_prefix`（LLM 额外唤醒前缀） | 要让租约命中的普通非前缀消息进入 Agent，必须留空；它不同于顶层普通唤醒词 |
 | `platform_settings.unique_session`（隔离会话） | 跨成员追踪必须关闭；开启后同一群不同成员使用不同 UMO，发令者建立的租约无法命中另一成员的消息 |
 | 白名单、原生 `platform_settings.rate_limit` | 仍在 AstrBot 原生流水线生效；插件默认不限频不等于关闭 AstrBot 原生限流 |
-| `plugin_set`、会话插件开关、独立工具开关 | 可分别让事件处理器或工具不可达，修改后必须核对五个工具仍可见 |
-| 操作工具的原生权限 | 获授权普通成员使用时，`manage_sender_activation`、`manage_sender_activation_rate`、`manage_heartbeat_lease` 必须为 `member`；插件再按当前群的授权表做指定 ID 校验 |
+| `plugin_set`、会话插件开关、独立工具开关 | 可分别让事件处理器或工具不可达，修改后必须核对所需工具仍可见 |
+| 操作工具的原生权限 | 获授权普通成员使用时，`manage_active_listener`、`manage_sender_activation`、`manage_sender_activation_rate`、`manage_heartbeat_lease` 必须为 `member`；插件再按当前群的授权表做指定 ID 校验 |
 
 `target_ids` 只接受真实数字 QQ ID，不接受 `current_sender`、昵称或其他占位符。
 插件页面会只读显示这些关键项的当前生效状态，不会替管理员修改 AstrBot
@@ -185,7 +198,7 @@ AstrBot 原生机制发生的私聊 Agent 请求中检测当前 UMO 的生效配
 
 1. 打开“插件管理”。
 2. 使用仓库 URL 安装，或上传经验证的精简运行 ZIP。
-3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.1.0-rc.17`。
+3. 确认插件显示名为“管理员的真理捍卫器”，版本为 `1.2.0-rc.1`。
 4. 在插件配置中检查对象激活、心跳、容量和限频上限。
 5. 打开插件详情中的“管理员的真理捍卫器控制台”页面，确认 `storage_ready` 为 `true`。
 
@@ -219,6 +232,21 @@ https://github.com/zjj1280637679-ship-it/astrbot_plugin_sender_activation
 工具成功回执到达前，AI 不应声称任务已经生效。
 
 ## 工具
+
+### `manage_active_listener`（v1.2 推荐入口）
+
+```text
+action: start | cancel | list
+condition_kind: sender | keyword | any_message | time_only
+condition_values: sender 的 QQ ID 或 keyword 的关键词
+frequency: each | every_3 | every_10 | custom
+response_speed: immediate_0s | normal_1s | settle_3s | custom
+watchdog: default_3m | ten_min | thirty_min | off | custom
+lifetime: 10m | 30m | 2h | 24h | custom
+goal: 醒来后重新判断的开放目标
+```
+
+这是一般性跨回合主动注意力的推荐入口。消息条件只产生信号；连续信号按订单自己的 delay 消抖，同一控制主体多个 READY 再合并为一次 Agent 激活。默认 `watchdog=default_3m`，因此“没有新事件”也不会让开放目标永久沉睡。目标完成时按 `listener_id` 精确 cancel；未及时 cancel 只可能多一次重新判断，不意味着必须发言。
 
 ### `manage_sender_activation_access`
 
@@ -280,7 +308,7 @@ Cron 页面停用的任务不会被强行开启。
 reason: 可选的当前语境理由，不向群聊显示
 ```
 
-只允许由本插件对象激活或心跳产生的当前主动回合调用。成功后使用 AstrBot
+只允许由本插件统一监听、对象激活、心跳或回响产生的当前主动回合调用。成功后使用 AstrBot
 本地工具的终结返回直接结束当前原生 Agent 工具循环，并移除本轮最终助手
 文本；不会再进入下一次工具选择。已经执行的外部工具动作不会撤销。普通
 `@`、普通原生会话和其他插件唤醒不能用它抹除回复。
