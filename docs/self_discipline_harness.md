@@ -60,15 +60,27 @@ AstrBot 继续负责真正的 Agent、消息、历史、工具、Provider 与执
 
 因此外界事件不是“电源开关”，而只是世界事实。
 
-只要一个 Contract 仍然有效、未完成、未过期且未被更高层规则终止，系统必须保证：
+对于具备内部节奏的 **Self-Discipline Duty**，只要 Contract 仍然有效、未完成、未过期且未被更高层规则终止，系统必须保证：
 
-    Live Contract
+    Live Self-Discipline Contract
+    ∧ Internal Cadence enabled
     ∧ not Done
     ∧ not Expired
             ↓
       Eventually Reconcile
 
-这就是职责驱动的持续性。
+当前 `AttentionProgram` 仍保留 `recheck=off` 作为较低层的 **Reactive Duty**：它只在相关世界变化出现时重新判断，因此不宣称“世界沉默时也必然回来”。Skill 对真正的公共自律任务应保留有限 Recheck / cadence。
+
+这区分了：
+
+    Reactive Duty
+    = 外界变化驱动重新判断
+
+    Self-Discipline Duty
+    = 外界变化筛选
+      + 内部节奏保证未来判断机会
+
+这样既保留通用基础设施，也不把“必然激活”的哲学错误套到明确关闭内部节奏的 Contract 上。
 
 ---
 
