@@ -39,10 +39,11 @@ jobs:
             main.py settings.py domain.py service.py storage.py \
             attention_domain.py attention_service.py echo_service.py \
             heartbeat_domain.py heartbeat_gate.py heartbeat_service.py cron_adapter.py \
-            activation_reservation.py access_domain.py access_service.py session_gate.py
+            activation_reservation.py access_domain.py access_service.py session_gate.py \
+            listener_service.py
           python -m json.tool _conf_schema.json >/dev/null
-          grep -q 'VERSION = "1.1.0-rc.19"' main.py
-          grep -q 'version: "1.1.0-rc.19"' metadata.yaml
+          grep -q 'VERSION = "1.2.0-rc.1"' main.py
+          grep -q 'version: "1.2.0-rc.1"' metadata.yaml
           grep -q 'astrbot_version: ">=4.26.1"' metadata.yaml
           git diff --check
 
@@ -53,6 +54,7 @@ jobs:
           python tests/test_heartbeat_truth.py
           python tests/test_concurrency_boundary.py
           python tests/test_astrbot_runtime.py
+          python tests/test_listener_runtime.py
 
       - name: Candidate summary
         run: |
